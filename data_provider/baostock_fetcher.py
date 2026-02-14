@@ -35,6 +35,19 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def _is_hk_code(stock_code: str) -> bool:
+    """
+    Check if the stock code is a Hong Kong stock.
+
+    HK stock codes: 'hk00700', 'hk1810', or 5-digit pure numbers like '00700'.
+    """
+    code = stock_code.strip().lower()
+    if code.startswith('hk'):
+        numeric_part = code[2:]
+        return numeric_part.isdigit() and 1 <= len(numeric_part) <= 5
+    return code.isdigit() and len(code) == 5
+
+
 def _is_us_code(stock_code: str) -> bool:
     """
     判断代码是否为美股
@@ -152,6 +165,11 @@ class BaostockFetcher(BaseFetcher):
             if code.startswith(('15', '16', '18')):
                 return f"sz.{code}"
 
+        # HK stocks: not supported by Baostock
+        if _is_hk_code(code):
+            logger.debug(f"港股 {code} 不受 BaostockFetcher 支持，跳过代码转换")
+            return f"hk.{code}"
+
         # 根据代码前缀判断市场
         if code.startswith(('600', '601', '603', '688')):
             return f"sh.{code}"
@@ -183,6 +201,10 @@ class BaostockFetcher(BaseFetcher):
         # 美股不支持，抛出异常让 DataFetcherManager 切换到其他数据源
         if _is_us_code(stock_code):
             raise DataFetchError(f"BaostockFetcher 不支持美股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
+
+        # 港股不支持，抛出异常让 DataFetcherManager 切换到其他数据源
+        if _is_hk_code(stock_code):
+            raise DataFetchError(f"BaostockFetcher 不支持港股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
         
         # 转换代码格式
         bs_code = self._convert_stock_code(stock_code)
