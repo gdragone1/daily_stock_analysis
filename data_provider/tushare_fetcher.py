@@ -59,6 +59,19 @@ def _is_etf_code(stock_code: str) -> bool:
     return code.startswith(_ETF_ALL_PREFIXES) and len(code) == 6
 
 
+def _is_hk_code(stock_code: str) -> bool:
+    """
+    Check if the stock code is a Hong Kong stock.
+
+    HK stock codes: 'hk00700', 'hk1810', or 5-digit pure numbers like '00700'.
+    """
+    code = stock_code.strip().lower()
+    if code.startswith('hk'):
+        numeric_part = code[2:]
+        return numeric_part.isdigit() and 1 <= len(numeric_part) <= 5
+    return code.isdigit() and len(code) == 5
+
+
 def _is_us_code(stock_code: str) -> bool:
     """
     判断代码是否为美股
@@ -277,6 +290,11 @@ class TushareFetcher(BaseFetcher):
         if code.startswith(_ETF_SZ_PREFIXES) and len(code) == 6:
             return f"{code}.SZ"
         
+        # HK stocks: not supported by Tushare
+        if _is_hk_code(code):
+            logger.debug(f"港股 {code} 不受 TushareFetcher 支持，跳过代码转换")
+            return f"{code}.HK"
+
         # Regular stocks
         # Shanghai: 600xxx, 601xxx, 603xxx, 688xxx (STAR Market)
         # Shenzhen: 000xxx, 002xxx, 300xxx (ChiNext)
@@ -315,6 +333,10 @@ class TushareFetcher(BaseFetcher):
         # US stocks not supported
         if _is_us_code(stock_code):
             raise DataFetchError(f"TushareFetcher 不支持美股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
+
+        # HK stocks not supported
+        if _is_hk_code(stock_code):
+            raise DataFetchError(f"TushareFetcher 不支持港股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
         
         # Rate-limit check
         self._check_rate_limit()
