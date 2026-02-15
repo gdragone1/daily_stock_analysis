@@ -192,6 +192,9 @@ class Config:
     debug: bool = False
     http_proxy: Optional[str] = None  # HTTP 代理 (例如: http://127.0.0.1:10809)
     https_proxy: Optional[str] = None # HTTPS 代理
+    # Whether to bypass proxy for domestic financial data domains (eastmoney, sina, etc.)
+    # Set to false in corporate networks where ALL external traffic must go through the proxy.
+    proxy_bypass_domestic: bool = True
     
     # === 定时任务配置 ===
     schedule_enabled: bool = False            # 是否启用定时任务
@@ -300,36 +303,57 @@ class Config:
         # 确保环境变量已加载
         setup_env()
 
-        # === 智能代理配置 (关键修复) ===
-        # 如果配置了代理，自动设置 NO_PROXY 以排除国内数据源，避免行情获取失败
+        # === 智能代理配置 ===
+        # PROXY_BYPASS_DOMESTIC controls whether domestic financial data domains
+        # (eastmoney, sina, etc.) bypass the proxy.
+        # - true (default): domestic domains go direct (for home/VPN users)
+        # - false: ALL traffic goes through proxy (for corporate networks like JD)
+        proxy_bypass_domestic = os.getenv('PROXY_BYPASS_DOMESTIC', 'true').lower() == 'true'
+
         http_proxy = os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
         if http_proxy:
-            # 国内金融数据源域名列表
-            domestic_domains = [
-                'eastmoney.com',   # 东方财富 (Efinance/Akshare)
-                'sina.com.cn',     # 新浪财经 (Akshare)
-                '163.com',         # 网易财经 (Akshare)
-                'tushare.pro',     # Tushare
-                'baostock.com',    # Baostock
-                'sse.com.cn',      # 上交所
-                'szse.cn',         # 深交所
-                'csindex.com.cn',  # 中证指数
-                'cninfo.com.cn',   # 巨潮资讯
-                'localhost',
-                '127.0.0.1'
-            ]
+            if proxy_bypass_domestic:
+                # Add domestic financial data domains to NO_PROXY to avoid
+                # routing them through a VPN/overseas proxy
+                domestic_domains = [
+                    'eastmoney.com',   # 东方财富 (Efinance/Akshare)
+                    'sina.com.cn',     # 新浪财经 (Akshare)
+                    '163.com',         # 网易财经 (Akshare)
+                    'tushare.pro',     # Tushare
+                    'baostock.com',    # Baostock
+                    'sse.com.cn',      # 上交所
+                    'szse.cn',         # 深交所
+                    'csindex.com.cn',  # 中证指数
+                    'cninfo.com.cn',   # 巨潮资讯
+                    'localhost',
+                    '127.0.0.1'
+                ]
 
-            # 获取现有的 no_proxy
-            current_no_proxy = os.getenv('NO_PROXY') or os.getenv('no_proxy') or ''
-            existing_domains = current_no_proxy.split(',') if current_no_proxy else []
+                # 获取现有的 no_proxy
+                current_no_proxy = os.getenv('NO_PROXY') or os.getenv('no_proxy') or ''
+                existing_domains = current_no_proxy.split(',') if current_no_proxy else []
 
-            # 合并去重
-            final_domains = list(set(existing_domains + domestic_domains))
-            final_no_proxy = ','.join(filter(None, final_domains))
+                # 合并去重
+                final_domains = list(set(existing_domains + domestic_domains))
+                final_no_proxy = ','.join(filter(None, final_domains))
 
-            # 设置环境变量 (requests/urllib3/aiohttp 都会遵守此设置)
-            os.environ['NO_PROXY'] = final_no_proxy
-            os.environ['no_proxy'] = final_no_proxy
+                # 设置环境变量 (requests/urllib3/aiohttp 都会遵守此设置)
+                os.environ['NO_PROXY'] = final_no_proxy
+                os.environ['no_proxy'] = final_no_proxy
+            else:
+                # Corporate network: do NOT add domestic domains to NO_PROXY.
+                # All external traffic (including eastmoney, sina, etc.) goes through
+                # the corporate proxy. Only keep localhost in NO_PROXY.
+                current_no_proxy = os.getenv('NO_PROXY') or os.getenv('no_proxy') or ''
+                existing_domains = [d.strip() for d in current_no_proxy.split(',') if d.strip()]
+                # Ensure localhost is always bypassed
+                for local in ('localhost', '127.0.0.1'):
+                    if local not in existing_domains:
+                        existing_domains.append(local)
+                final_no_proxy = ','.join(existing_domains)
+                os.environ['NO_PROXY'] = final_no_proxy
+                os.environ['no_proxy'] = final_no_proxy
+                logger.info(f"[代理] 企业网络模式：所有外部流量走代理，NO_PROXY={final_no_proxy}")
 
             # 确保 HTTP_PROXY 也被正确设置（以防仅在 .env 中定义但未导出）
             os.environ['HTTP_PROXY'] = http_proxy
@@ -457,6 +481,7 @@ class Config:
             debug=os.getenv('DEBUG', 'false').lower() == 'true',
             http_proxy=os.getenv('HTTP_PROXY'),
             https_proxy=os.getenv('HTTPS_PROXY'),
+            proxy_bypass_domestic=os.getenv('PROXY_BYPASS_DOMESTIC', 'true').lower() == 'true',
             schedule_enabled=os.getenv('SCHEDULE_ENABLED', 'false').lower() == 'true',
             schedule_time=os.getenv('SCHEDULE_TIME', '18:00'),
             schedule_run_immediately=os.getenv('SCHEDULE_RUN_IMMEDIATELY', 'true').lower() == 'true',
