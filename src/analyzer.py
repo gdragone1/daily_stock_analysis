@@ -13,6 +13,7 @@ A股自选股智能分析系统 - AI分析层
 import json
 import logging
 import time
+import requests
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 from json_repair import repair_json
@@ -511,7 +512,7 @@ class GeminiAnalyzer:
         """
         初始化 AI 分析器
 
-        优先级：Gemini > OpenAI 兼容 API
+        优先级：Gemini > JD Cloud (Gemini-compatible) > OpenAI 兼容 API
 
         Args:
             api_key: Gemini API Key（可选，默认从配置读取）
@@ -522,6 +523,7 @@ class GeminiAnalyzer:
         self._current_model_name = None  # 当前使用的模型名称
         self._using_fallback = False  # 是否正在使用备选模型
         self._use_openai = False  # 是否使用 OpenAI 兼容 API
+        self._use_jdcloud = False  # 是否使用 JD Cloud API
         self._openai_client = None  # OpenAI 客户端
 
         # 检查 Gemini API Key 是否有效（过滤占位符）
@@ -532,15 +534,19 @@ class GeminiAnalyzer:
             try:
                 self._init_model()
             except Exception as e:
-                logger.warning(f"Gemini 初始化失败: {e}，尝试 OpenAI 兼容 API")
-                self._init_openai_fallback()
+                logger.warning(f"Gemini 初始化失败: {e}，尝试 JD Cloud API")
+                if not self._init_jdcloud():
+                    self._init_openai_fallback()
         else:
-            # Gemini Key 未配置，尝试 OpenAI
-            logger.info("Gemini API Key 未配置，尝试使用 OpenAI 兼容 API")
-            self._init_openai_fallback()
+            # Gemini Key 未配置，尝试 JD Cloud
+            logger.info("Gemini API Key 未配置，尝试使用 JD Cloud API")
+            if not self._init_jdcloud():
+                # JD Cloud 也未配置，尝试 OpenAI
+                logger.info("JD Cloud API Key 未配置，尝试使用 OpenAI 兼容 API")
+                self._init_openai_fallback()
 
-        # 两者都未配置
-        if not self._model and not self._openai_client:
+        # 全部未配置
+        if not self._model and not self._use_jdcloud and not self._openai_client:
             logger.warning("未配置任何 AI API Key，AI 分析功能将不可用")
 
     def _init_openai_fallback(self) -> None:
@@ -595,6 +601,134 @@ class GeminiAnalyzer:
                 logger.error(f"OpenAI 代理配置错误: {e}，如使用 SOCKS 代理请运行: pip install httpx[socks]")
             else:
                 logger.error(f"OpenAI 兼容 API 初始化失败: {e}")
+
+    def _init_jdcloud(self) -> bool:
+        """
+        Initialize JD Cloud Gemini-compatible API.
+
+        The JD Cloud API uses the same request/response format as Google Gemini
+        but at a custom endpoint (http://ai-api.jdcloud.com/v1/responses).
+
+        Returns:
+            True if JD Cloud API is configured and ready, False otherwise.
+        """
+        config = get_config()
+        jdcloud_key_valid = (
+            config.jdcloud_api_key
+            and not config.jdcloud_api_key.startswith('your_')
+            and len(config.jdcloud_api_key) > 10
+        )
+
+        if not jdcloud_key_valid:
+            logger.debug("JD Cloud API Key 未配置或配置无效")
+            return False
+
+        self._jdcloud_api_key = config.jdcloud_api_key
+        self._jdcloud_api_url = config.jdcloud_api_url
+        self._jdcloud_model = config.jdcloud_model
+        self._current_model_name = config.jdcloud_model
+        self._use_jdcloud = True
+        logger.info(
+            f"JD Cloud API 初始化成功 (url: {config.jdcloud_api_url}, model: {config.jdcloud_model})"
+        )
+        return True
+
+    def _call_jdcloud_api(self, prompt: str, generation_config: dict) -> str:
+        """
+        Call JD Cloud Gemini-compatible API via HTTP.
+
+        Request format (Gemini-style):
+            {
+                "model": "Gemini 3-Pro-Preview",
+                "stream": false,
+                "contents": {"role": "user", "parts": [{"text": "..."}]}
+            }
+
+        Response format:
+            {
+                "candidates": [{"content": {"parts": [{"text": "..."}]}}]
+            }
+
+        Args:
+            prompt: The full prompt text (system prompt + user data).
+            generation_config: Generation parameters (temperature, etc.).
+
+        Returns:
+            The response text from the model.
+        """
+        config = get_config()
+        max_retries = config.gemini_max_retries
+        base_delay = config.gemini_retry_delay
+
+        # Build the combined prompt with system instruction
+        combined_prompt = f"{self.SYSTEM_PROMPT}\n\n{prompt}"
+
+        payload = {
+            "model": self._jdcloud_model,
+            "stream": False,
+            "contents": {
+                "role": "user",
+                "parts": [
+                    {"text": combined_prompt}
+                ]
+            }
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self._jdcloud_api_key}"
+        }
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    delay = min(delay, 60)
+                    logger.info(f"[JDCloud] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
+                    time.sleep(delay)
+
+                response = requests.post(
+                    self._jdcloud_api_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=180
+                )
+                response.raise_for_status()
+
+                data = response.json()
+
+                # Extract text from Gemini-style response
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        text = parts[0].get("text", "")
+                        if text:
+                            return text
+
+                raise ValueError(f"JD Cloud API 返回空响应: {json.dumps(data, ensure_ascii=False)[:200]}")
+
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code if e.response is not None else 0
+                is_rate_limit = status_code == 429
+                if is_rate_limit:
+                    logger.warning(f"[JDCloud] API 限流 (429)，第 {attempt + 1}/{max_retries} 次尝试")
+                else:
+                    logger.warning(
+                        f"[JDCloud] API 调用失败 (HTTP {status_code})，"
+                        f"第 {attempt + 1}/{max_retries} 次尝试: {str(e)[:100]}"
+                    )
+                if attempt == max_retries - 1:
+                    raise
+
+            except Exception as e:
+                logger.warning(
+                    f"[JDCloud] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {str(e)[:100]}"
+                )
+                if attempt == max_retries - 1:
+                    raise
+
+        raise Exception("JD Cloud API 调用失败，已达最大重试次数")
 
     def _init_model(self) -> None:
         """
@@ -669,7 +803,7 @@ class GeminiAnalyzer:
 
     def is_available(self) -> bool:
         """检查分析器是否可用"""
-        return self._model is not None or self._openai_client is not None
+        return self._model is not None or self._use_jdcloud or self._openai_client is not None
 
     def _call_openai_api(self, prompt: str, generation_config: dict) -> str:
         """
@@ -774,6 +908,10 @@ class GeminiAnalyzer:
         Returns:
             响应文本
         """
+        # 如果已经在使用 JD Cloud 模式，直接调用 JD Cloud
+        if self._use_jdcloud:
+            return self._call_jdcloud_api(prompt, generation_config)
+
         # 如果已经在使用 OpenAI 模式，直接调用 OpenAI
         if self._use_openai:
             return self._call_openai_api(prompt, generation_config)
@@ -826,7 +964,15 @@ class GeminiAnalyzer:
                     # 非限流错误，记录并继续重试
                     logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
         
-        # Gemini 所有重试都失败，尝试 OpenAI 兼容 API
+        # Gemini 所有重试都失败，尝试 JD Cloud API
+        if self._init_jdcloud():
+            logger.warning("[Gemini] 所有重试失败，切换到 JD Cloud API")
+            try:
+                return self._call_jdcloud_api(prompt, generation_config)
+            except Exception as jdcloud_error:
+                logger.error(f"[JDCloud] 备选 API 也失败: {jdcloud_error}")
+
+        # JD Cloud 也不可用或失败，尝试 OpenAI 兼容 API
         if self._openai_client:
             logger.warning("[Gemini] 所有重试失败，切换到 OpenAI 兼容 API")
             try:
@@ -932,7 +1078,7 @@ class GeminiAnalyzer:
             }
 
             # 根据实际使用的 API 显示日志
-            api_provider = "OpenAI" if self._use_openai else "Gemini"
+            api_provider = "JDCloud" if self._use_jdcloud else ("OpenAI" if self._use_openai else "Gemini")
             logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
             
             # 使用带重试的 API 调用
