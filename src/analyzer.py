@@ -522,8 +522,6 @@ class GeminiAnalyzer:
         """
         初始化 AI 分析器
 
-        优先级：Gemini > JD Cloud (Gemini-compatible) > OpenAI 兼容 API
-
         Args:
             api_key: Gemini API Key（可选，默认从配置读取）
         """
@@ -994,7 +992,17 @@ class GeminiAnalyzer:
         if self._use_jdcloud:
             return self._call_jdcloud_api(prompt, generation_config)
 
-        # 如果已经在使用 OpenAI 模式，直接调用 OpenAI
+        if self._use_anthropic:
+            try:
+                return self._call_anthropic_api(prompt, generation_config)
+            except Exception as anthropic_error:
+                if self._openai_client:
+                    logger.warning(
+                        "[Anthropic] All retries failed, falling back to OpenAI"
+                    )
+                    return self._call_openai_api(prompt, generation_config)
+                raise anthropic_error
+
         if self._use_openai:
             return self._call_openai_api(prompt, generation_config)
 
@@ -1046,6 +1054,35 @@ class GeminiAnalyzer:
                     # 非限流错误，记录并继续重试
                     logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
         
+        # Gemini 所有重试都失败，尝试 JD Cloud API
+        if self._init_jdcloud():
+            logger.warning("[Gemini] 所有重试失败，切换到 JD Cloud API")
+            try:
+                return self._call_jdcloud_api(prompt, generation_config)
+            except Exception as jdcloud_error:
+                logger.error(f"[JDCloud] 备选 API 也失败: {jdcloud_error}")
+
+        # JD Cloud 也不可用或失败，尝试 OpenAI 兼容 API
+        # Gemini 重试耗尽，尝试 Anthropic 再 OpenAI
+        if self._anthropic_client:
+            logger.warning("[Gemini] All retries failed, switching to Anthropic")
+            try:
+                return self._call_anthropic_api(prompt, generation_config)
+            except Exception as anthropic_error:
+                logger.warning(
+                    f"[Anthropic] Fallback failed: {anthropic_error}"
+                )
+                if self._openai_client:
+                    logger.warning("[Gemini] Trying OpenAI as final fallback")
+                    try:
+                        return self._call_openai_api(prompt, generation_config)
+                    except Exception as openai_error:
+                        logger.error(
+                            f"[OpenAI] Final fallback also failed: {openai_error}"
+                        )
+                        raise last_error or anthropic_error or openai_error
+                raise last_error or anthropic_error
+
         # Gemini 所有重试都失败，尝试 JD Cloud API
         if self._init_jdcloud():
             logger.warning("[Gemini] 所有重试失败，切换到 JD Cloud API")
@@ -1172,9 +1209,13 @@ class GeminiAnalyzer:
                 "temperature": config.gemini_temperature,
                 "max_output_tokens": 8192,
             }
-
-            # 根据实际使用的 API 显示日志
-            api_provider = "JDCloud" if self._use_jdcloud else ("OpenAI" if self._use_openai else "Gemini")
+            
+            api_provider = (
+                "OpenAI" if self._use_openai
+                else "JDCloud" if self._use_jdcloud
+                else "Anthropic" if self._use_anthropic
+                else "Gemini"
+            )
             logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
             
             # 使用带重试的 API 调用
