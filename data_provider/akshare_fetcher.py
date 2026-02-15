@@ -84,6 +84,14 @@ _etf_realtime_cache: Dict[str, Any] = {
     'ttl': 1200  # 20分钟缓存有效期
 }
 
+# HK stock realtime cache (ak.stock_hk_spot_em fetches all ~4600 HK stocks,
+# very slow through proxies; cache for 20 minutes to avoid repeated full fetches)
+_hk_realtime_cache: Dict[str, Any] = {
+    'data': None,
+    'timestamp': 0,
+    'ttl': 1200  # 20 min TTL
+}
+
 
 def _is_etf_code(stock_code: str) -> bool:
     """
@@ -1130,6 +1138,7 @@ class AkshareFetcher(BaseFetcher):
         
         数据来源：ak.stock_hk_spot_em()
         包含：最新价、涨跌幅、成交量、成交额等
+        Uses module-level _hk_realtime_cache to avoid repeated full-market fetches.
         
         Args:
             stock_code: 港股代码
@@ -1142,21 +1151,42 @@ class AkshareFetcher(BaseFetcher):
         source_key = "akshare_hk"
         
         try:
-            # 防封禁策略
-            self._set_random_user_agent()
-            self._enforce_rate_limit()
-            
             # 确保代码格式正确（5位数字）
             code = stock_code.lower().replace('hk', '').zfill(5)
-            
-            logger.info(f"[API调用] ak.stock_hk_spot_em() 获取港股实时行情...")
-            import time as _time
-            api_start = _time.time()
-            
-            df = ak.stock_hk_spot_em()
-            
-            api_elapsed = _time.time() - api_start
-            logger.info(f"[API返回] ak.stock_hk_spot_em 成功: 返回 {len(df)} 只港股, 耗时 {api_elapsed:.2f}s")
+
+            # Check cache first
+            current_time = time.time()
+            if (
+                _hk_realtime_cache['data'] is not None
+                and current_time - _hk_realtime_cache['timestamp'] < _hk_realtime_cache['ttl']
+            ):
+                df = _hk_realtime_cache['data']
+                cache_age = int(current_time - _hk_realtime_cache['timestamp'])
+                logger.debug(
+                    f"[缓存命中] 港股实时行情(akshare) - 缓存年龄 {cache_age}s/{_hk_realtime_cache['ttl']}s"
+                )
+            else:
+                # Cache miss - fetch all HK stocks
+                logger.info(f"[缓存未命中] 触发全量刷新 港股实时行情(akshare)")
+
+                # 防封禁策略
+                self._set_random_user_agent()
+                self._enforce_rate_limit()
+
+                logger.info(f"[API调用] ak.stock_hk_spot_em() 获取港股实时行情...")
+                import time as _time
+                api_start = _time.time()
+
+                df = ak.stock_hk_spot_em()
+
+                api_elapsed = _time.time() - api_start
+                logger.info(f"[API返回] ak.stock_hk_spot_em 成功: 返回 {len(df)} 只港股, 耗时 {api_elapsed:.2f}s")
+
+                # Update cache
+                _hk_realtime_cache['data'] = df
+                _hk_realtime_cache['timestamp'] = time.time()
+                logger.info(f"[缓存更新] 港股实时行情(akshare) 缓存已刷新，TTL={_hk_realtime_cache['ttl']}s")
+
             circuit_breaker.record_success(source_key)
             
             # 查找指定港股
