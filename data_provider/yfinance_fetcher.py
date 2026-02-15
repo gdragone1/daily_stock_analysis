@@ -226,71 +226,107 @@ class YfinanceFetcher(BaseFetcher):
         
         return df
 
-    def get_main_indices(self) -> Optional[List[Dict[str, Any]]]:
+    # A-share indices: internal code -> (yfinance ticker, display name)
+    _A_SHARE_INDICES = {
+        'sh000001': ('000001.SS', '上证指数'),
+        'sz399001': ('399001.SZ', '深证成指'),
+        'sz399006': ('399006.SZ', '创业板指'),
+        'sh000688': ('000688.SS', '科创50'),
+        'sh000016': ('000016.SS', '上证50'),
+        'sh000300': ('000300.SS', '沪深300'),
+    }
+
+    # Global (HK + US) indices: internal code -> (yfinance ticker, display name)
+    _GLOBAL_INDICES = {
+        'hkHSI':  ('^HSI',  '恒生指数'),
+        'usIXIC': ('^IXIC', '纳斯达克'),
+        'usGSPC': ('^GSPC', '标普500'),
+    }
+
+    def _fetch_indices(self, mapping: dict) -> List[Dict[str, Any]]:
         """
-        获取主要指数行情 (Yahoo Finance)
+        Fetch index quotes for a given code -> (yf_ticker, name) mapping.
+
+        Shared implementation for both A-share and global indices.
         """
         import yfinance as yf
 
-        # 映射关系：akshare代码 -> (yfinance代码, 名称)
-        yf_mapping = {
-            'sh000001': ('000001.SS', '上证指数'),
-            'sz399001': ('399001.SZ', '深证成指'),
-            'sz399006': ('399006.SZ', '创业板指'),
-            'sh000688': ('000688.SS', '科创50'),
-            'sh000016': ('000016.SS', '上证50'),
-            'sh000300': ('000300.SS', '沪深300'),
-        }
-
-        results = []
-        try:
-            for ak_code, (yf_code, name) in yf_mapping.items():
-                try:
-                    ticker = yf.Ticker(yf_code)
-                    # 获取最近2天数据以计算涨跌
-                    hist = ticker.history(period='2d')
-                    if hist.empty:
-                        continue
-
-                    today = hist.iloc[-1]
-                    prev = hist.iloc[-2] if len(hist) > 1 else today
-
-                    price = float(today['Close'])
-                    prev_close = float(prev['Close'])
-                    change = price - prev_close
-                    change_pct = (change / prev_close) * 100 if prev_close else 0
-
-                    # 振幅
-                    high = float(today['High'])
-                    low = float(today['Low'])
-                    amplitude = ((high - low) / prev_close * 100) if prev_close else 0
-
-                    results.append({
-                        'code': ak_code,
-                        'name': name,
-                        'current': price,
-                        'change': change,
-                        'change_pct': change_pct,
-                        'open': float(today['Open']),
-                        'high': high,
-                        'low': low,
-                        'prev_close': prev_close,
-                        'volume': float(today['Volume']),
-                        'amount': 0.0, # Yahoo Finance 可能不提供准确的成交额
-                        'amplitude': amplitude
-                    })
-                    logger.debug(f"[Yfinance] 获取指数 {name} 成功")
-
-                except Exception as e:
-                    logger.warning(f"[Yfinance] 获取指数 {name} 失败: {e}")
+        results: List[Dict[str, Any]] = []
+        for internal_code, (yf_code, name) in mapping.items():
+            try:
+                ticker = yf.Ticker(yf_code)
+                # Fetch last 2 trading days to compute change
+                hist = ticker.history(period='2d')
+                if hist.empty:
                     continue
+
+                today = hist.iloc[-1]
+                prev = hist.iloc[-2] if len(hist) > 1 else today
+
+                price = float(today['Close'])
+                prev_close = float(prev['Close'])
+                change = price - prev_close
+                change_pct = (change / prev_close) * 100 if prev_close else 0
+
+                high = float(today['High'])
+                low = float(today['Low'])
+                amplitude = ((high - low) / prev_close * 100) if prev_close else 0
+
+                results.append({
+                    'code': internal_code,
+                    'name': name,
+                    'current': price,
+                    'change': change,
+                    'change_pct': change_pct,
+                    'open': float(today['Open']),
+                    'high': high,
+                    'low': low,
+                    'prev_close': prev_close,
+                    'volume': float(today['Volume']),
+                    'amount': 0.0,  # Yahoo Finance does not provide turnover
+                    'amplitude': amplitude,
+                })
+                logger.debug(f"[Yfinance] 获取指数 {name} 成功")
+
+            except Exception as e:
+                logger.warning(f"[Yfinance] 获取指数 {name} 失败: {e}")
+                continue
+
+        return results
+
+    def get_main_indices(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        获取主要指数行情 (Yahoo Finance)
+
+        Returns both A-share and global indices.
+        """
+        try:
+            # A-share + global
+            results = self._fetch_indices(self._A_SHARE_INDICES)
+            results.extend(self._fetch_indices(self._GLOBAL_INDICES))
 
             if results:
                 logger.info(f"[Yfinance] 成功获取 {len(results)} 个指数行情")
                 return results
-
         except Exception as e:
             logger.error(f"[Yfinance] 获取指数行情失败: {e}")
+
+        return None
+
+    def get_global_indices(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetch only global (HK + US) index quotes.
+
+        Called by DataFetcherManager to supplement A-share-only results
+        returned by other fetchers (efinance, akshare, tushare).
+        """
+        try:
+            results = self._fetch_indices(self._GLOBAL_INDICES)
+            if results:
+                logger.info(f"[Yfinance] 成功获取 {len(results)} 个全球指数行情")
+                return results
+        except Exception as e:
+            logger.error(f"[Yfinance] 获取全球指数行情失败: {e}")
 
         return None
 
