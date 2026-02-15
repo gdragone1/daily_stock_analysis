@@ -36,6 +36,13 @@
   - 支持 `MERGE_EMAIL_NOTIFICATION` 环境变量，设为 `true` 时将个股分析和大盘复盘合并为一次推送
   - 默认 `false`，减少邮件数量、降低被识别为垃圾邮件的风险
 
+### 修复
+- 🐛 修复 Tushare Token 无效时仍被提升为最高优先级的问题
+  - `ts.set_token()` / `ts.pro_api()` 不会向服务端发起请求，无法检测无效 Token
+  - 新增 `_validate_token()` 在初始化阶段通过 `trade_cal` 轻量探测验证 Token 有效性
+  - Token 被服务端拒绝时，自动降级为不可用状态，不再提升优先级
+  - 运行时 API 调用遇到 Token 错误也会自动禁用数据源，避免反复失败
+
 ### 优化
 - 图片识别 API 仅保留 `file` 表单字段，移除 `image` 字段以统一接口
 - 图片识别 Vision API 超时 60 秒，前端请求超时 60 秒
