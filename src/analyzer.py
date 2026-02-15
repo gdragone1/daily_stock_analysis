@@ -522,11 +522,7 @@ class GeminiAnalyzer:
         """
         初始化 AI 分析器
 
-<<<<<<< HEAD
-        优先级：Gemini > JD Cloud (Gemini-compatible) > Anthropic > OpenAI 兼容 API
-=======
         优先级：Gemini > JD Cloud (Gemini-compatible) > OpenAI 兼容 API
->>>>>>> b80625c (feat: add JD Cloud Gemini-compatible API as AI provider)
 
         Args:
             api_key: Gemini API Key（可选，默认从配置读取）
@@ -537,7 +533,6 @@ class GeminiAnalyzer:
         self._current_model_name = None  # 当前使用的模型名称
         self._using_fallback = False  # 是否正在使用备选模型
         self._use_openai = False  # 是否使用 OpenAI 兼容 API
-        self._use_jdcloud = False  # 是否使用 JD Cloud API
         self._use_anthropic = False  # 是否使用 Anthropic Claude API
         self._use_jdcloud = False  # 是否使用 JD Cloud API
         self._openai_client = None  # OpenAI 客户端
@@ -819,11 +814,10 @@ class GeminiAnalyzer:
             return False
 
     def is_available(self) -> bool:
-<<<<<<< HEAD
         """检查分析器是否可用。"""
         return (
             self._model is not None
-            or self._use_jdcloud
+            or self._use_jdcloud is not None
             or self._anthropic_client is not None
             or self._openai_client is not None
         )
@@ -892,10 +886,6 @@ class GeminiAnalyzer:
                 if attempt == max_retries - 1:
                     raise
         raise Exception("Anthropic API failed after max retries")
-=======
-        """检查分析器是否可用"""
-        return self._model is not None or self._use_jdcloud or self._openai_client is not None
->>>>>>> b80625c (feat: add JD Cloud Gemini-compatible API as AI provider)
 
     def _call_openai_api(self, prompt: str, generation_config: dict) -> str:
         """
@@ -1003,22 +993,6 @@ class GeminiAnalyzer:
         # 如果已经在使用 JD Cloud 模式，直接调用 JD Cloud
         if self._use_jdcloud:
             return self._call_jdcloud_api(prompt, generation_config)
-<<<<<<< HEAD
-
-        # 如果已经在使用 OpenAI 模式，直接调用 OpenAI
-        # 若使用 Anthropic，调用 Anthropic（失败时回退到 OpenAI）
-        if self._use_anthropic:
-            try:
-                return self._call_anthropic_api(prompt, generation_config)
-            except Exception as anthropic_error:
-                if self._openai_client:
-                    logger.warning(
-                        "[Anthropic] All retries failed, falling back to OpenAI"
-                    )
-                    return self._call_openai_api(prompt, generation_config)
-                raise anthropic_error
-=======
->>>>>>> b80625c (feat: add JD Cloud Gemini-compatible API as AI provider)
 
         # 如果已经在使用 OpenAI 模式，直接调用 OpenAI
         if self._use_openai:
@@ -1072,15 +1046,6 @@ class GeminiAnalyzer:
                     # 非限流错误，记录并继续重试
                     logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
         
-        # Gemini 所有重试都失败，尝试 JD Cloud API
-        if self._init_jdcloud():
-            logger.warning("[Gemini] 所有重试失败，切换到 JD Cloud API")
-            try:
-                return self._call_jdcloud_api(prompt, generation_config)
-            except Exception as jdcloud_error:
-                logger.error(f"[JDCloud] 备选 API 也失败: {jdcloud_error}")
-
-        # JD Cloud 也不可用或失败，尝试 OpenAI 兼容 API
         # Gemini 重试耗尽，尝试 Anthropic 再 OpenAI
         if self._anthropic_client:
             logger.warning("[Gemini] All retries failed, switching to Anthropic")
@@ -1228,18 +1193,8 @@ class GeminiAnalyzer:
                 "max_output_tokens": 8192,
             }
 
-<<<<<<< HEAD
-            # 记录实际使用的 API 提供方
-            api_provider = (
-                "OpenAI" if self._use_openai
-                else "JDCloud" if self._use_jdcloud
-                else "Anthropic" if self._use_anthropic
-                else "Gemini"
-            )
-=======
             # 根据实际使用的 API 显示日志
             api_provider = "JDCloud" if self._use_jdcloud else ("OpenAI" if self._use_openai else "Gemini")
->>>>>>> b80625c (feat: add JD Cloud Gemini-compatible API as AI provider)
             logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
             
             # 使用带重试的 API 调用
