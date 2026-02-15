@@ -75,6 +75,11 @@ class Config:
     openai_base_url: Optional[str] = None  # 如: https://api.openai.com/v1
     openai_model: str = "gpt-4o-mini"  # OpenAI 兼容模型名称
     openai_temperature: float = 0.7  # OpenAI 温度参数（0.0-2.0，默认0.7）
+
+    # JD Cloud Gemini-compatible API (uses Gemini request/response format at custom URL)
+    jdcloud_api_key: Optional[str] = None
+    jdcloud_api_url: str = "http://ai-api.jdcloud.com/v1/responses"
+    jdcloud_model: str = "Gemini 3-Pro-Preview"
     
     # === 搜索引擎配置（支持多 Key 负载均衡）===
     bocha_api_keys: List[str] = field(default_factory=list)  # Bocha API Keys
@@ -367,6 +372,9 @@ class Config:
             openai_base_url=os.getenv('OPENAI_BASE_URL'),
             openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
             openai_temperature=float(os.getenv('OPENAI_TEMPERATURE', '0.7')),
+            jdcloud_api_key=os.getenv('JDCLOUD_API_KEY'),
+            jdcloud_api_url=os.getenv('JDCLOUD_API_URL', 'http://ai-api.jdcloud.com/v1/responses'),
+            jdcloud_model=os.getenv('JDCLOUD_MODEL', 'Gemini 3-Pro-Preview'),
             bocha_api_keys=bocha_api_keys,
             tavily_api_keys=tavily_api_keys,
             brave_api_keys=brave_api_keys,
@@ -570,9 +578,9 @@ class Config:
         if not self.tushare_token:
             warnings.append("提示：未配置 Tushare Token，将使用其他数据源")
         
-        if not self.gemini_api_key and not self.openai_api_key:
-            warnings.append("警告：未配置 Gemini 或 OpenAI API Key，AI 分析功能将不可用")
-        elif not self.gemini_api_key:
+        if not self.gemini_api_key and not self.openai_api_key and not self.jdcloud_api_key:
+            warnings.append("警告：未配置 Gemini / OpenAI / JDCloud API Key，AI 分析功能将不可用")
+        elif not self.gemini_api_key and not self.jdcloud_api_key:
             warnings.append("提示：未配置 Gemini API Key，将使用 OpenAI 兼容 API")
         
         if not self.bocha_api_keys and not self.tavily_api_keys and not self.brave_api_keys and not self.serpapi_keys:
