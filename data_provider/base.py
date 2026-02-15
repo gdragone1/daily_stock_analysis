@@ -879,16 +879,61 @@ class DataFetcherManager:
         return result
 
     def get_main_indices(self) -> List[Dict[str, Any]]:
-        """获取主要指数实时行情（自动切换数据源）"""
+        """
+        Fetch main index quotes (auto failover) and supplement with
+        global indices (HK Hang Seng, NASDAQ, S&P 500) from YfinanceFetcher.
+
+        Most A-share fetchers (efinance, akshare, tushare) only return
+        domestic indices. This method appends global indices so the market
+        review covers Hong Kong and US markets as well.
+        """
+        result: List[Dict[str, Any]] = []
+
+        # Step 1: get primary result from first successful fetcher
         for fetcher in self._fetchers:
             try:
                 data = fetcher.get_main_indices()
                 if data:
                     logger.info(f"[{fetcher.name}] 获取指数行情成功")
-                    return data
+                    result = data
+                    break
             except Exception as e:
                 logger.warning(f"[{fetcher.name}] 获取指数行情失败: {e}")
                 continue
+
+        # Step 2: supplement with global indices if not already present
+        # Check whether the result already contains global codes
+        existing_codes = {item.get('code', '') for item in result}
+        has_global = any(
+            c.startswith(('hk', 'us')) or c in ('^HSI', '^IXIC', '^GSPC')
+            for c in existing_codes
+        )
+
+        if not has_global:
+            global_data = self._fetch_global_indices()
+            if global_data:
+                result.extend(global_data)
+                logger.info(f"[全球指数] 补充了 {len(global_data)} 个全球指数行情")
+
+        return result
+
+    def _fetch_global_indices(self) -> List[Dict[str, Any]]:
+        """
+        Fetch global indices (HK, US) from YfinanceFetcher.
+
+        Falls back gracefully — returns empty list on failure so
+        the market review still works with A-share data alone.
+        """
+        for fetcher in self._fetchers:
+            if fetcher.name == "YfinanceFetcher":
+                try:
+                    if hasattr(fetcher, 'get_global_indices'):
+                        data = fetcher.get_global_indices()
+                        if data:
+                            return data
+                except Exception as e:
+                    logger.warning(f"[YfinanceFetcher] 获取全球指数失败: {e}")
+                break
         return []
 
     def get_market_stats(self) -> Dict[str, Any]:
