@@ -708,8 +708,6 @@ class Config:
         
         if not self.gemini_api_key and not self.anthropic_api_key and not self.openai_api_key and not self.jdcloud_api_key:
             warnings.append("警告：未配置 Gemini / Anthropic/ OpenAI / JDCloud API Key，AI 分析功能将不可用")
-        elif not self.gemini_api_key and not self.anthropic_api_key and not self.jdcloud_api_key:
-            warnings.append("提示：未配置 Gemini / Anthropic API Key，将使用 OpenAI 兼容 API")
         
         if not self.bocha_api_keys and not self.tavily_api_keys and not self.brave_api_keys and not self.serpapi_keys:
             warnings.append("提示：未配置搜索引擎 API Key (Bocha/Tavily/Brave/SerpAPI)，新闻搜索功能将不可用")

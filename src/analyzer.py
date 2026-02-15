@@ -522,7 +522,11 @@ class GeminiAnalyzer:
         """
         初始化 AI 分析器
 
+<<<<<<< HEAD
         优先级：Gemini > JD Cloud (Gemini-compatible) > Anthropic > OpenAI 兼容 API
+=======
+        优先级：Gemini > JD Cloud (Gemini-compatible) > OpenAI 兼容 API
+>>>>>>> b80625c (feat: add JD Cloud Gemini-compatible API as AI provider)
 
         Args:
             api_key: Gemini API Key（可选，默认从配置读取）
@@ -535,6 +539,7 @@ class GeminiAnalyzer:
         self._use_openai = False  # 是否使用 OpenAI 兼容 API
         self._use_jdcloud = False  # 是否使用 JD Cloud API
         self._use_anthropic = False  # 是否使用 Anthropic Claude API
+        self._use_jdcloud = False  # 是否使用 JD Cloud API
         self._openai_client = None  # OpenAI 客户端
         self._anthropic_client = None  # Anthropic 客户端
 
@@ -814,6 +819,7 @@ class GeminiAnalyzer:
             return False
 
     def is_available(self) -> bool:
+<<<<<<< HEAD
         """检查分析器是否可用。"""
         return (
             self._model is not None
@@ -886,6 +892,10 @@ class GeminiAnalyzer:
                 if attempt == max_retries - 1:
                     raise
         raise Exception("Anthropic API failed after max retries")
+=======
+        """检查分析器是否可用"""
+        return self._model is not None or self._use_jdcloud or self._openai_client is not None
+>>>>>>> b80625c (feat: add JD Cloud Gemini-compatible API as AI provider)
 
     def _call_openai_api(self, prompt: str, generation_config: dict) -> str:
         """
@@ -993,6 +1003,7 @@ class GeminiAnalyzer:
         # 如果已经在使用 JD Cloud 模式，直接调用 JD Cloud
         if self._use_jdcloud:
             return self._call_jdcloud_api(prompt, generation_config)
+<<<<<<< HEAD
 
         # 如果已经在使用 OpenAI 模式，直接调用 OpenAI
         # 若使用 Anthropic，调用 Anthropic（失败时回退到 OpenAI）
@@ -1006,8 +1017,10 @@ class GeminiAnalyzer:
                     )
                     return self._call_openai_api(prompt, generation_config)
                 raise anthropic_error
+=======
+>>>>>>> b80625c (feat: add JD Cloud Gemini-compatible API as AI provider)
 
-        # 若使用 OpenAI（仅当无 Anthropic 时为主选）
+        # 如果已经在使用 OpenAI 模式，直接调用 OpenAI
         if self._use_openai:
             return self._call_openai_api(prompt, generation_config)
 
@@ -1088,6 +1101,15 @@ class GeminiAnalyzer:
                         raise last_error or anthropic_error or openai_error
                 raise last_error or anthropic_error
 
+        # Gemini 所有重试都失败，尝试 JD Cloud API
+        if self._init_jdcloud():
+            logger.warning("[Gemini] 所有重试失败，切换到 JD Cloud API")
+            try:
+                return self._call_jdcloud_api(prompt, generation_config)
+            except Exception as jdcloud_error:
+                logger.error(f"[JDCloud] 备选 API 也失败: {jdcloud_error}")
+
+        # JD Cloud 也不可用或失败，尝试 OpenAI 兼容 API
         if self._openai_client:
             logger.warning("[Gemini] All retries failed, switching to OpenAI")
             try:
@@ -1206,6 +1228,7 @@ class GeminiAnalyzer:
                 "max_output_tokens": 8192,
             }
 
+<<<<<<< HEAD
             # 记录实际使用的 API 提供方
             api_provider = (
                 "OpenAI" if self._use_openai
@@ -1213,6 +1236,10 @@ class GeminiAnalyzer:
                 else "Anthropic" if self._use_anthropic
                 else "Gemini"
             )
+=======
+            # 根据实际使用的 API 显示日志
+            api_provider = "JDCloud" if self._use_jdcloud else ("OpenAI" if self._use_openai else "Gemini")
+>>>>>>> b80625c (feat: add JD Cloud Gemini-compatible API as AI provider)
             logger.info(f"[LLM调用] 开始调用 {api_provider} API...")
             
             # 使用带重试的 API 调用
