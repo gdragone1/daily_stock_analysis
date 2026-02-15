@@ -82,6 +82,14 @@
   - 支持 `MERGE_EMAIL_NOTIFICATION` 环境变量，设为 `true` 时将个股分析和大盘复盘合并为一次推送
   - 默认 `false`，减少邮件数量、降低被识别为垃圾邮件的风险
 
+### 新增
+- 🌍 **大盘复盘新增港股、美股指数**
+  - 恒生指数、纳斯达克、标普500 自动补充到大盘复盘报告
+  - 数据源：YfinanceFetcher（Yahoo Finance 全球数据）
+  - A股指数由原有数据源（efinance/akshare/tushare）获取后，自动补充全球指数
+  - LLM Prompt 新增「全球市场联动」分析章节
+  - 指数表格分为 A股 / 全球 两组展示
+
 ### 修复
 - 🐛 修复 SMTP 邮件发送在云端/CI 环境 "Connection unexpectedly closed" 失败问题
   - 新增 `_smtp_connect()` 统一连接函数，支持端口自动回退（465 SSL ↔ 587 STARTTLS）

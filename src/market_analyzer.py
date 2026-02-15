@@ -5,7 +5,7 @@
 ===================================
 
 职责：
-1. 获取大盘指数数据（上证、深证、创业板）
+1. 获取大盘指数数据（A股、港股、美股）
 2. 搜索市场新闻形成复盘情报
 3. 使用大模型生成每日大盘复盘报告
 """
@@ -342,9 +342,15 @@ class MarketAnalyzer:
         if indices_block:
             review = self._insert_after_section(review, r'###\s*二、指数点评', indices_block)
 
-        # Inject sector rankings after "### 四、热点解读" section
+        # Inject sector rankings after "### 五、热点解读" section (shifted by one
+        # due to new "三、全球市场联动" section); also try the old "四" numbering
+        # in case the LLM uses it.
         if sector_block:
-            review = self._insert_after_section(review, r'###\s*四、热点解读', sector_block)
+            injected = self._insert_after_section(review, r'###\s*五、热点解读', sector_block)
+            if injected == review:
+                # Fallback: LLM may have used the old numbering
+                injected = self._insert_after_section(review, r'###\s*四、热点解读', sector_block)
+            review = injected
 
         return review
 
@@ -380,24 +386,49 @@ class MarketAnalyzer:
         ]
         return "\n".join(lines)
 
+    @staticmethod
+    def _is_global_index(idx: MarketIndex) -> bool:
+        """Check if an index is a global (HK/US) index by its code prefix."""
+        return idx.code.startswith(('hk', 'us'))
+
     def _build_indices_block(self, overview: MarketOverview) -> str:
-        """构建指数行情表格（不含振幅）"""
+        """Build indices table block, separating A-share and global indices."""
         if not overview.indices:
             return ""
-        lines = [
-            "| 指数 | 最新 | 涨跌幅 | 成交额(亿) |",
-            "|------|------|--------|-----------|"]
-        for idx in overview.indices:
-            arrow = "🔴" if idx.change_pct < 0 else "🟢" if idx.change_pct > 0 else "⚪"
-            amount_raw = idx.amount or 0.0
-            if amount_raw == 0.0:
-                # Yahoo Finance 不提供成交额，显示 N/A 避免误解
-                amount_str = "N/A"
-            elif amount_raw > 1e6:
-                amount_str = f"{amount_raw / 1e8:.0f}"
-            else:
-                amount_str = f"{amount_raw:.0f}"
-            lines.append(f"| {idx.name} | {idx.current:.2f} | {arrow} {idx.change_pct:+.2f}% | {amount_str} |")
+
+        a_share = [idx for idx in overview.indices if not self._is_global_index(idx)]
+        global_idx = [idx for idx in overview.indices if self._is_global_index(idx)]
+
+        lines: list = []
+
+        # A-share table
+        if a_share:
+            lines.extend([
+                "| A股指数 | 最新 | 涨跌幅 | 成交额(亿) |",
+                "|---------|------|--------|-----------|",
+            ])
+            for idx in a_share:
+                arrow = "🔴" if idx.change_pct < 0 else "🟢" if idx.change_pct > 0 else "⚪"
+                amount_raw = idx.amount or 0.0
+                amount_yi = amount_raw / 1e8 if amount_raw > 1e6 else amount_raw
+                lines.append(
+                    f"| {idx.name} | {idx.current:.2f} | {arrow} {idx.change_pct:+.2f}% | {amount_yi:.0f} |"
+                )
+
+        # Global (HK + US) table
+        if global_idx:
+            if a_share:
+                lines.append("")  # blank line between tables
+            lines.extend([
+                "| 全球指数 | 最新 | 涨跌幅 |",
+                "|----------|------|--------|",
+            ])
+            for idx in global_idx:
+                arrow = "🔴" if idx.change_pct < 0 else "🟢" if idx.change_pct > 0 else "⚪"
+                lines.append(
+                    f"| {idx.name} | {idx.current:.2f} | {arrow} {idx.change_pct:+.2f}% |"
+                )
+
         return "\n".join(lines)
 
     def _build_sector_block(self, overview: MarketOverview) -> str:
@@ -419,9 +450,11 @@ class MarketAnalyzer:
 
     def _build_review_prompt(self, overview: MarketOverview, news: List) -> str:
         """构建复盘报告 Prompt"""
-        # 指数行情信息（简洁格式，不用emoji）
+        # A-share index text (global indices handled separately below)
         indices_text = ""
         for idx in overview.indices:
+            if self._is_global_index(idx):
+                continue
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
             indices_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
         
@@ -441,113 +474,16 @@ class MarketAnalyzer:
                 snippet = n.get('snippet', '')[:100]
             news_text += f"{i}. {title}\n   {snippet}\n"
         
-        # 按 region 组装市场概况与板块区块（美股无涨跌家数、板块数据）
-        stats_block = ""
-        sector_block = ""
-        if self.region == "us":
-            if self.profile.has_market_stats:
-                stats_block = f"""## Market Overview
-- Up: {overview.up_count} | Down: {overview.down_count} | Flat: {overview.flat_count}
-- Limit up: {overview.limit_up_count} | Limit down: {overview.limit_down_count}
-- Total volume (CNY bn): {overview.total_amount:.0f}"""
-            else:
-                stats_block = "## Market Overview\n(US market has no equivalent advance/decline stats.)"
+        # Separate A-share and global index text for prompt
+        a_share_indices = [idx for idx in overview.indices if not self._is_global_index(idx)]
+        global_indices = [idx for idx in overview.indices if self._is_global_index(idx)]
 
-            if self.profile.has_sector_rankings:
-                sector_block = f"""## Sector Performance
-Leading: {top_sectors_text if top_sectors_text else "N/A"}
-Lagging: {bottom_sectors_text if bottom_sectors_text else "N/A"}"""
-            else:
-                sector_block = "## Sector Performance\n(US sector data not available.)"
-        else:
-            if self.profile.has_market_stats:
-                stats_block = f"""## 市场概况
-- 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
-- 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
-- 两市成交额: {overview.total_amount:.0f} 亿元"""
-            else:
-                stats_block = "## 市场概况\n（美股暂无涨跌家数等统计）"
+        global_text = ""
+        for idx in global_indices:
+            direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
+            global_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
 
-            if self.profile.has_sector_rankings:
-                sector_block = f"""## 板块表现
-领涨: {top_sectors_text if top_sectors_text else "暂无数据"}
-领跌: {bottom_sectors_text if bottom_sectors_text else "暂无数据"}"""
-            else:
-                sector_block = "## 板块表现\n（美股暂无板块涨跌数据）"
-
-        data_no_indices_hint = (
-            "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"
-            if not indices_text
-            else ""
-        )
-        indices_placeholder = indices_text if indices_text else ("No index data (API error)" if self.region == "us" else "暂无指数数据（接口异常）")
-        news_placeholder = news_text if news_text else ("No relevant news" if self.region == "us" else "暂无相关新闻")
-
-        # 美股场景使用英文提示语，便于生成更符合美股语境的报告
-        if self.region == "us":
-            data_no_indices_hint_en = (
-                "Note: Market data fetch failed. Rely mainly on [Market News] for qualitative analysis. Do not invent index levels."
-                if not indices_text
-                else ""
-            )
-            return f"""You are a professional US/A/H market analyst. Please produce a concise US market recap report based on the data below.
-
-[Requirements]
-- Output pure Markdown only
-- No JSON
-- No code blocks
-- Use emoji sparingly in headings (at most one per heading)
-
----
-
-# Today's Market Data
-
-## Date
-{overview.date}
-
-## Major Indices
-{indices_placeholder}
-
-{stats_block}
-
-{sector_block}
-
-## Market News
-{news_placeholder}
-
-{data_no_indices_hint_en}
-
----
-
-# Output Template (follow this structure)
-
-## {overview.date} US Market Recap
-
-### 1. Market Summary
-(2-3 sentences on overall market performance, index moves, volume)
-
-### 2. Index Commentary
-(Analyse S&P 500, Nasdaq, Dow and other major index moves.)
-
-### 3. Fund Flows
-(Interpret volume and flow implications)
-
-### 4. Sector/Theme Highlights
-(Analyze drivers behind leading/lagging sectors)
-
-### 5. Outlook
-(Short-term view based on price action and news)
-
-### 6. Risk Alerts
-(Key risks to watch)
-
----
-
-Output the report content directly, no extra commentary.
-"""
-
-        # A 股场景使用中文提示语
-        return f"""你是一位专业的A/H/美股市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。
+        prompt = f"""你是一位专业的A/H/美股市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。
 
 【重要】输出要求：
 - 必须输出纯 Markdown 文本格式
@@ -562,10 +498,16 @@ Output the report content directly, no extra commentary.
 ## 日期
 {overview.date}
 
-## 主要指数
-{indices_placeholder}
+## A股指数
+{indices_text if indices_text else "暂无指数数据（接口异常）"}
 
-{stats_block}
+## 全球指数（港股 & 美股）
+{global_text if global_text else "暂无全球指数数据"}
+
+## A股市场概况
+- 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
+- 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
+- 两市成交额: {overview.total_amount:.0f} 亿元
 
 {sector_block}
 
@@ -581,21 +523,24 @@ Output the report content directly, no extra commentary.
 ## {overview.date} 大盘复盘
 
 ### 一、市场总结
-（2-3句话概括今日市场整体表现，包括指数涨跌、成交量变化）
+（2-3句话概括今日A股市场整体表现，包括指数涨跌、成交量变化）
 
 ### 二、指数点评
-（{self.profile.prompt_index_hint}）
+（分析上证、深证、创业板等A股各指数走势特点）
 
-### 三、资金动向
+### 三、全球市场联动
+（点评港股恒生指数、美股纳斯达克和标普500走势，分析对A股的影响）
+
+### 四、资金动向
 （解读成交额流向的含义）
 
-### 四、热点解读
+### 五、热点解读
 （分析领涨领跌板块背后的逻辑和驱动因素）
 
-### 五、后市展望
-（结合当前走势和新闻，给出明日市场预判）
+### 六、后市展望
+（结合A股、港美股走势和新闻，给出明日市场预判）
 
-### 六、风险提示
+### 七、风险提示
 （需要关注的风险点）
 
 ---
@@ -605,20 +550,14 @@ Output the report content directly, no extra commentary.
     
     def _generate_template_review(self, overview: MarketOverview, news: List) -> str:
         """使用模板生成复盘报告（无大模型时的备选方案）"""
-        mood_code = self.profile.mood_index_code
-        # 根据 mood_index_code 查找对应指数
-        # cn: mood_code="000001"，idx.code 可能为 "sh000001"（以 mood_code 结尾）
-        # us: mood_code="SPX"，idx.code 直接为 "SPX"
-        mood_index = next(
-            (
-                idx
-                for idx in overview.indices
-                if idx.code == mood_code or idx.code.endswith(mood_code)
-            ),
+
+        # 判断市场走势
+        sh_index = next(
+            (idx for idx in overview.indices if idx.code in ('000001', 'sh000001')),
             None,
         )
-        if mood_index:
-            if mood_index.change_pct > 1:
+        if sh_index:
+            if sh_index.change_pct > 1:
                 market_mood = "强势上涨"
             elif mood_index.change_pct > 0:
                 market_mood = "小幅上涨"
@@ -628,22 +567,41 @@ Output the report content directly, no extra commentary.
                 market_mood = "明显下跌"
         else:
             market_mood = "震荡整理"
-        
-        # 指数行情（简洁格式）
-        indices_text = ""
-        for idx in overview.indices[:4]:
+
+        # Separate A-share and global indices
+        a_share = [idx for idx in overview.indices if not self._is_global_index(idx)]
+        global_idx = [idx for idx in overview.indices if self._is_global_index(idx)]
+
+        a_share_text = ""
+        for idx in a_share[:6]:
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
-            indices_text += f"- **{idx.name}**: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
-        
+            a_share_text += f"- **{idx.name}**: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+
+        global_text = ""
+        for idx in global_idx:
+            direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
+            global_text += f"- **{idx.name}**: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+
         # 板块信息
         top_text = "、".join([s['name'] for s in overview.top_sectors[:3]])
         bottom_text = "、".join([s['name'] for s in overview.bottom_sectors[:3]])
-        
-        # 按 region 决定是否包含涨跌统计和板块（美股无）
-        stats_section = ""
-        if self.profile.has_market_stats:
-            stats_section = f"""
-### 三、涨跌统计
+
+        global_section = ""
+        if global_text:
+            global_section = f"""
+### 三、全球市场
+{global_text}"""
+
+        report = f"""## 📊 {overview.date} 大盘复盘
+
+### 一、市场总结
+今日A股市场整体呈现**{market_mood}**态势。
+
+### 二、A股主要指数
+{a_share_text}
+{global_section}
+
+### {'四' if global_text else '三'}、涨跌统计
 | 指标 | 数值 |
 |------|------|
 | 上涨家数 | {overview.up_count} |
@@ -651,25 +609,15 @@ Output the report content directly, no extra commentary.
 | 涨停 | {overview.limit_up_count} |
 | 跌停 | {overview.limit_down_count} |
 | 两市成交额 | {overview.total_amount:.0f}亿 |
-"""
-        sector_section = ""
-        if self.profile.has_sector_rankings and (top_text or bottom_text):
-            sector_section = f"""
-### 四、板块表现
+
+### {'五' if global_text else '四'}、板块表现
 - **领涨**: {top_text}
 - **领跌**: {bottom_text}
 """
         market_label = "A股" if self.region == "cn" else "美股"
         report = f"""## {overview.date} 大盘复盘
 
-### 一、市场总结
-今日{market_label}市场整体呈现**{market_mood}**态势。
-
-### 二、主要指数
-{indices_text}
-{stats_section}
-{sector_section}
-### 五、风险提示
+### {'六' if global_text else '五'}、风险提示
 市场有风险，投资需谨慎。以上数据仅供参考，不构成投资建议。
 
 ---
