@@ -300,7 +300,7 @@ class YfinanceFetcher(BaseFetcher):
                 continue
 
         return results
-
+        
     def get_main_indices(self) -> Optional[List[Dict[str, Any]]]:
         """
         获取主要指数行情 (Yahoo Finance)
@@ -313,10 +313,10 @@ class YfinanceFetcher(BaseFetcher):
             results.extend(self._fetch_indices(self._GLOBAL_INDICES))
 
             if results:
-                logger.info(f"[Yfinance] 成功获取 {len(results)} 个 A 股指数行情")
+                logger.info(f"[Yfinance] 成功获取 {len(results)} 个指数行情")
                 return results
         except Exception as e:
-            logger.error(f"[Yfinance] 获取 A 股指数行情失败: {e}")
+            logger.error(f"[Yfinance] 获取指数行情失败: {e}")
 
         return None
 

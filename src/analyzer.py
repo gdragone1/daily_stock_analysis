@@ -815,7 +815,7 @@ class GeminiAnalyzer:
         """检查分析器是否可用。"""
         return (
             self._model is not None
-            or self._use_jdcloud
+            or self._use_jdcloud is not None
             or self._anthropic_client is not None
             or self._openai_client is not None
         )
@@ -1054,15 +1054,6 @@ class GeminiAnalyzer:
                     # 非限流错误，记录并继续重试
                     logger.warning(f"[Gemini] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
         
-        # Gemini 所有重试都失败，尝试 JD Cloud API
-        if self._init_jdcloud():
-            logger.warning("[Gemini] 所有重试失败，切换到 JD Cloud API")
-            try:
-                return self._call_jdcloud_api(prompt, generation_config)
-            except Exception as jdcloud_error:
-                logger.error(f"[JDCloud] 备选 API 也失败: {jdcloud_error}")
-
-        # JD Cloud 也不可用或失败，尝试 OpenAI 兼容 API
         # Gemini 重试耗尽，尝试 Anthropic 再 OpenAI
         if self._anthropic_client:
             logger.warning("[Gemini] All retries failed, switching to Anthropic")
