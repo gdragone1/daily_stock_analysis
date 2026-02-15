@@ -84,6 +84,21 @@ def _is_us_code(stock_code: str) -> bool:
     return bool(re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code))
 
 
+class _TokenInvalidError(Exception):
+    """Raised when the Tushare server explicitly rejects the token."""
+    pass
+
+
+# Keywords that indicate the token itself is wrong (not a quota / rate-limit issue).
+_TOKEN_ERROR_KEYWORDS = ("token不对", "token error", "token无效", "invalid token", "token错误")
+
+
+def _is_token_error(msg: str) -> bool:
+    """Return True if *msg* indicates an invalid-token rejection."""
+    lower = msg.lower()
+    return any(kw in lower for kw in _TOKEN_ERROR_KEYWORDS)
+
+
 class TushareFetcher(BaseFetcher):
     """
     Tushare Pro 数据源实现
@@ -124,35 +139,76 @@ class TushareFetcher(BaseFetcher):
     
     def _init_api(self) -> None:
         """
-        初始化 Tushare API
-        
-        如果 Token 未配置，此数据源将不可用
+        Initialize Tushare API and validate token with a lightweight probe.
+
+        Steps:
+        1. Read token from config; skip if empty.
+        2. Create tushare pro_api instance and patch endpoint.
+        3. Validate token by calling trade_cal (minimal quota cost).
+        4. If validation fails with a token error, mark API as unavailable.
         """
         config = get_config()
-        
+
         if not config.tushare_token:
             logger.warning("Tushare Token 未配置，此数据源不可用")
             return
-        
+
         try:
             import tushare as ts
-            
+
             # Set Token
             ts.set_token(config.tushare_token)
-            
+
             # Get API instance
             self._api = ts.pro_api()
-            
+
             # Fix: tushare SDK 1.4.x hardcodes api.waditu.com/dataapi which may
             # be unavailable (503). Monkey-patch the query method to use the
             # official api.tushare.pro endpoint which posts to root URL.
             self._patch_api_endpoint(config.tushare_token)
 
+            # Validate token with a lightweight API call (trade_cal is free
+            # and costs almost no quota).  ts.set_token / ts.pro_api are
+            # purely local – they never talk to the server – so a bad token
+            # will only surface on the first real request.
+            self._validate_token()
+
             logger.info("Tushare API 初始化成功")
-            
+
+        except _TokenInvalidError:
+            # Token rejected by server – degrade gracefully
+            logger.warning("Tushare Token 无效（服务端拒绝），此数据源不可用，请检查 TUSHARE_TOKEN 配置")
+            self._api = None
         except Exception as e:
             logger.error(f"Tushare API 初始化失败: {e}")
             self._api = None
+
+    def _validate_token(self) -> None:
+        """
+        Validate Tushare token by issuing a cheap API call.
+
+        Uses ``trade_cal`` with a 1-day range which is free for all
+        token tiers and returns a tiny payload.
+
+        Raises:
+            _TokenInvalidError: if the server explicitly rejects the token.
+            Exception: for other network / server errors (caller decides).
+        """
+        try:
+            probe_date = datetime.now().strftime("%Y%m%d")
+            self._api.trade_cal(
+                exchange="",
+                start_date=probe_date,
+                end_date=probe_date,
+            )
+        except Exception as e:
+            msg = str(e)
+            # Tushare returns messages like "您的token不对" or "token error"
+            if _is_token_error(msg):
+                raise _TokenInvalidError(msg) from e
+            # Other transient errors (timeout, 503, …) – don't block init;
+            # the fetcher will retry on real calls later.
+            logger.warning(f"Tushare token 验证时遇到非致命错误（跳过）: {e}")
 
     def _patch_api_endpoint(self, token: str) -> None:
         """
@@ -371,13 +427,20 @@ class TushareFetcher(BaseFetcher):
             return df
             
         except Exception as e:
-            error_msg = str(e).lower()
-            
-            # 检测配额超限
-            if any(keyword in error_msg for keyword in ['quota', '配额', 'limit', '权限']):
+            error_msg = str(e)
+
+            # Detect invalid token at runtime and disable fetcher
+            if _is_token_error(error_msg):
+                logger.error(f"Tushare Token 无效，禁用此数据源: {e}")
+                self._api = None
+                raise DataFetchError(f"Tushare Token 无效: {e}") from e
+
+            # Detect quota / rate-limit errors
+            error_lower = error_msg.lower()
+            if any(kw in error_lower for kw in ['quota', '配额', 'limit', '权限']):
                 logger.warning(f"Tushare 配额可能超限: {e}")
                 raise RateLimitError(f"Tushare 配额超限: {e}") from e
-            
+
             raise DataFetchError(f"Tushare 获取数据失败: {e}") from e
     
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
@@ -473,7 +536,11 @@ class TushareFetcher(BaseFetcher):
                 return name
             
         except Exception as e:
-            logger.warning(f"Tushare 获取股票名称失败 {stock_code}: {e}")
+            if _is_token_error(str(e)):
+                logger.error(f"Tushare Token 无效，禁用此数据源: {e}")
+                self._api = None
+            else:
+                logger.warning(f"Tushare 获取股票名称失败 {stock_code}: {e}")
         
         return None
     
@@ -515,7 +582,11 @@ class TushareFetcher(BaseFetcher):
                 return df[['code', 'name', 'industry', 'area', 'market']]
             
         except Exception as e:
-            logger.warning(f"Tushare 获取股票列表失败: {e}")
+            if _is_token_error(str(e)):
+                logger.error(f"Tushare Token 无效，禁用此数据源: {e}")
+                self._api = None
+            else:
+                logger.warning(f"Tushare 获取股票列表失败: {e}")
         
         return None
     
@@ -692,6 +763,10 @@ class TushareFetcher(BaseFetcher):
                             'amplitude': 0.0 # Tushare index_daily 不直接返回振幅
                         })
                 except Exception as e:
+                    if _is_token_error(str(e)):
+                        logger.error(f"[Tushare] Token 无效，禁用此数据源: {e}")
+                        self._api = None
+                        return None
                     logger.debug(f"Tushare 获取指数 {name} 失败: {e}")
                     continue
 
@@ -701,7 +776,11 @@ class TushareFetcher(BaseFetcher):
                 logger.warning("[Tushare] 未获取到指数行情数据")
 
         except Exception as e:
-            logger.error(f"[Tushare] 获取指数行情失败: {e}")
+            if _is_token_error(str(e)):
+                logger.error(f"[Tushare] Token 无效，禁用此数据源: {e}")
+                self._api = None
+            else:
+                logger.error(f"[Tushare] 获取指数行情失败: {e}")
 
         return None
 
@@ -772,7 +851,11 @@ class TushareFetcher(BaseFetcher):
                 logger.warning("[Tushare] 获取市场统计数据为空")
 
         except Exception as e:
-            logger.error(f"[Tushare] 获取市场统计失败: {e}")
+            if _is_token_error(str(e)):
+                logger.error(f"[Tushare] Token 无效，禁用此数据源: {e}")
+                self._api = None
+            else:
+                logger.error(f"[Tushare] 获取市场统计失败: {e}")
 
         return None
 
