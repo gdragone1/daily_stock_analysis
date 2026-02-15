@@ -89,6 +89,61 @@ SMTP_CONFIGS = {
     "139.com": {"server": "smtp.139.com", "port": 465, "ssl": True},
 }
 
+# Default SMTP connection timeout (seconds)
+_SMTP_TIMEOUT = 30
+
+
+def _smtp_connect(
+    smtp_server: str,
+    smtp_port: int,
+    use_ssl: bool,
+    timeout: int = _SMTP_TIMEOUT,
+) -> smtplib.SMTP:
+    """
+    Create an SMTP connection, trying the primary port first and
+    falling back to the alternate port/mode on connection failure.
+
+    Fallback logic:
+    - SSL (port 465) fails  -> retry with STARTTLS on port 587
+    - STARTTLS (port 587) fails -> retry with SSL on port 465
+
+    This handles cloud/CI environments that block one port but not the other,
+    and QQ Mail / 163 Mail servers that support both modes.
+
+    Returns:
+        A connected (but not yet authenticated) smtplib.SMTP instance.
+    """
+    def _connect(server: str, port: int, ssl: bool, tout: int):
+        if ssl:
+            return smtplib.SMTP_SSL(server, port, timeout=tout)
+        else:
+            conn = smtplib.SMTP(server, port, timeout=tout)
+            conn.starttls()
+            return conn
+
+    try:
+        return _connect(smtp_server, smtp_port, use_ssl, timeout)
+    except (OSError, smtplib.SMTPException) as primary_err:
+        # Determine the alternate port/mode
+        if use_ssl and smtp_port == 465:
+            alt_port, alt_ssl = 587, False
+        elif not use_ssl and smtp_port == 587:
+            alt_port, alt_ssl = 465, True
+        else:
+            # Non-standard port – no obvious fallback
+            raise
+
+        mode_label = "SSL" if alt_ssl else "STARTTLS"
+        logger.warning(
+            f"SMTP 连接 {smtp_server}:{smtp_port} 失败 ({primary_err})，"
+            f"尝试回退到 {smtp_server}:{alt_port} ({mode_label})"
+        )
+        try:
+            return _connect(smtp_server, alt_port, alt_ssl, timeout)
+        except (OSError, smtplib.SMTPException):
+            # Both attempts failed – raise the original error for clarity
+            raise primary_err
+
 
 class ChannelDetector:
     """
@@ -1930,22 +1985,16 @@ class NotificationService:
                 use_ssl = True
                 logger.warning(f"未知邮箱类型 {domain}，尝试通用配置: {smtp_server}:{smtp_port}")
             
-            # 根据配置选择连接方式
-            if use_ssl:
-                # SSL 连接（端口 465）
-                server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
-            else:
-                # TLS 连接（端口 587）
-                server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
-                server.starttls()
-            
+            # Connect with automatic port fallback (465↔587)
+            server = _smtp_connect(smtp_server, smtp_port, use_ssl)
+
             server.login(sender, password)
             server.send_message(msg)
             server.quit()
-            
+
             logger.info(f"邮件发送成功，收件人: {receivers}")
             return True
-            
+
         except smtplib.SMTPAuthenticationError:
             logger.error("邮件发送失败：认证错误，请检查邮箱和授权码是否正确")
             return False
@@ -1998,11 +2047,8 @@ class NotificationService:
                 smtp_server, smtp_port = f"smtp.{domain}", 465
                 use_ssl = True
 
-            if use_ssl:
-                server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
-            else:
-                server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
-                server.starttls()
+            # Connect with automatic port fallback (465↔587)
+            server = _smtp_connect(smtp_server, smtp_port, use_ssl)
             server.login(sender, password)
             server.send_message(msg)
             server.quit()

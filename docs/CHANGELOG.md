@@ -37,6 +37,9 @@
   - 默认 `false`，减少邮件数量、降低被识别为垃圾邮件的风险
 
 ### 修复
+- 🐛 修复 SMTP 邮件发送在云端/CI 环境 "Connection unexpectedly closed" 失败问题
+  - 新增 `_smtp_connect()` 统一连接函数，支持端口自动回退（465 SSL ↔ 587 STARTTLS）
+  - 主端口连接失败时自动尝试备用端口，覆盖 `send_to_email` 和内联图片邮件两条路径
 - 🐛 修复 Tushare Token 无效时仍被提升为最高优先级的问题
   - `ts.set_token()` / `ts.pro_api()` 不会向服务端发起请求，无法检测无效 Token
   - 新增 `_validate_token()` 在初始化阶段通过 `trade_cal` 轻量探测验证 Token 有效性
