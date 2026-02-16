@@ -18,6 +18,34 @@ from dotenv import load_dotenv, dotenv_values
 from dataclasses import dataclass, field
 
 
+def _split_multi(raw: str) -> List[str]:
+    """
+    Split a raw env value into a list of trimmed, non-empty strings.
+
+    Accepted delimiters (in order of priority):
+      - comma ','       (most common)
+      - semicolon ';'   (common in email clients like Outlook)
+      - whitespace       (space / tab, fallback)
+
+    Examples:
+        "a@q.com, b@q.com"      -> ['a@q.com', 'b@q.com']
+        "a@q.com; b@q.com"      -> ['a@q.com', 'b@q.com']
+        "a@q.com b@q.com"       -> ['a@q.com', 'b@q.com']
+        "a@q.com,b@q.com;c@q.com" -> ['a@q.com', 'b@q.com', 'c@q.com']
+    """
+    # Replace semicolons with commas so we can split once
+    normalized = raw.replace(';', ',')
+    parts = normalized.split(',')
+    # Further split each part by whitespace to handle space-separated values
+    result: List[str] = []
+    for part in parts:
+        for token in part.split():
+            token = token.strip()
+            if token:
+                result.append(token)
+    return result
+
+
 def setup_env(override: bool = False):
     """
     Initialize environment variables from .env file.
@@ -430,7 +458,7 @@ class Config:
             email_sender=os.getenv('EMAIL_SENDER'),
             email_sender_name=os.getenv('EMAIL_SENDER_NAME', '股票分析助手'),
             email_password=os.getenv('EMAIL_PASSWORD'),
-            email_receivers=[r.strip() for r in os.getenv('EMAIL_RECEIVERS', '').split(',') if r.strip()],
+            email_receivers=_split_multi(os.getenv('EMAIL_RECEIVERS', '')),
             stock_email_groups=cls._parse_stock_email_groups(),
             pushover_user_key=os.getenv('PUSHOVER_USER_KEY'),
             pushover_api_token=os.getenv('PUSHOVER_API_TOKEN'),
@@ -534,7 +562,7 @@ class Config:
             if m:
                 idx = int(m.group(1))
                 val = os.environ[key].strip()
-                groups.setdefault(idx, {})['emails'] = [e.strip() for e in val.split(',') if e.strip()]
+                groups.setdefault(idx, {})['emails'] = _split_multi(val)
         result = []
         for idx in sorted(groups.keys()):
             g = groups[idx]
