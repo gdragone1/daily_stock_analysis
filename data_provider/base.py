@@ -131,9 +131,12 @@ class BaseFetcher(ABC):
         """
         pass
 
-    def get_main_indices(self) -> Optional[List[Dict[str, Any]]]:
+    def get_main_indices(self, region: str = "cn") -> Optional[List[Dict[str, Any]]]:
         """
         获取主要指数实时行情
+
+        Args:
+            region: 市场区域，cn=A股 us=美股
 
         Returns:
             List[Dict]: 指数列表，每个元素为字典，包含:
@@ -924,6 +927,7 @@ class DataFetcherManager:
         logger.info(f"[股票名称] 批量获取完成，成功 {len(result)}/{len(stock_codes)}")
         return result
 
+<<<<<<< HEAD
     def get_main_indices(self) -> List[Dict[str, Any]]:
         """
         Fetch main index quotes (auto failover) and supplement with
@@ -936,9 +940,13 @@ class DataFetcherManager:
         result: List[Dict[str, Any]] = []
 
         # Step 1: get primary result from first successful fetcher
+=======
+    def get_main_indices(self, region: str = "cn") -> List[Dict[str, Any]]:
+        """获取主要指数实时行情（自动切换数据源）"""
+>>>>>>> 88fdaf7 (feat: 大盘复盘可选除 A 股外的其它大盘(Issue #299) (#348))
         for fetcher in self._fetchers:
             try:
-                data = fetcher.get_main_indices()
+                data = fetcher.get_main_indices(region=region)
                 if data:
                     logger.info(f"[{fetcher.name}] 获取指数行情成功")
                     result = data
