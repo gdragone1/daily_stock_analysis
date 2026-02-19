@@ -919,21 +919,31 @@ class DataFetcherManager:
 
     def _fetch_global_indices(self) -> List[Dict[str, Any]]:
         """
-        Fetch global indices (HK, US) from YfinanceFetcher.
+        Fetch global indices (HK, US) with multi-source fallback.
+
+        Priority:
+        1. AkshareFetcher (akshare: Sina US indices + Eastmoney HK indices)
+        2. YfinanceFetcher (Yahoo Finance)
 
         Falls back gracefully — returns empty list on failure so
         the market review still works with A-share data alone.
         """
-        for fetcher in self._fetchers:
-            if fetcher.name == "YfinanceFetcher":
-                try:
-                    if hasattr(fetcher, 'get_global_indices'):
-                        data = fetcher.get_global_indices()
-                        if data:
-                            return data
-                except Exception as e:
-                    logger.warning(f"[YfinanceFetcher] 获取全球指数失败: {e}")
-                break
+        # Try each fetcher that implements get_global_indices, in priority order
+        source_names = ["AkshareFetcher", "YfinanceFetcher"]
+        for target_name in source_names:
+            for fetcher in self._fetchers:
+                if fetcher.name == target_name:
+                    try:
+                        if hasattr(fetcher, 'get_global_indices'):
+                            data = fetcher.get_global_indices()
+                            if data:
+                                logger.info(f"[{target_name}] 获取全球指数成功: {len(data)} 个")
+                                return data
+                    except Exception as e:
+                        logger.warning(f"[{target_name}] 获取全球指数失败: {e}")
+                    break
+
+        logger.warning("[全球指数] 所有数据源均未返回全球指数数据")
         return []
 
     def get_market_stats(self) -> Dict[str, Any]:

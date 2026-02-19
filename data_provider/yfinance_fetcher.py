@@ -238,9 +238,11 @@ class YfinanceFetcher(BaseFetcher):
 
     # Global (HK + US) indices: internal code -> (yfinance ticker, display name)
     _GLOBAL_INDICES = {
-        'hkHSI':  ('^HSI',  '恒生指数'),
-        'usIXIC': ('^IXIC', '纳斯达克'),
-        'usGSPC': ('^GSPC', '标普500'),
+        'hkHSI':    ('^HSI',   '恒生指数'),
+        'hkHSTECH': ('^HSTECH', '恒生科技'),
+        'usIXIC':   ('^IXIC',  '纳斯达克'),
+        'usGSPC':   ('^GSPC',  '标普500'),
+        'usDJI':    ('^DJI',   '道琼斯'),
     }
 
     def _fetch_indices(self, mapping: dict) -> List[Dict[str, Any]]:

@@ -239,11 +239,12 @@ class MarketAnalyzer:
         today = datetime.now()
         date_str = today.strftime('%Y年%m月%d日')
 
-        # 多维度搜索
+        # 多维度搜索（覆盖 A股、港股、美股）
         search_queries = [
             "A股 大盘 复盘",
             "股市 行情 分析",
             "A股 市场 热点 板块",
+            "港股 恒生指数 纳斯达克 美股",
         ]
         
         try:
@@ -509,7 +510,8 @@ class MarketAnalyzer:
 ## 市场新闻
 {news_text if news_text else "暂无相关新闻"}
 
-{"注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。" if not indices_text else ""}
+{"注意：由于A股行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。" if not indices_text else ""}
+{"注意：全球指数数据缺失，请在【三、全球市场联动】部分根据市场新闻进行定性分析，不要编造具体数值。" if not global_text else ""}
 
 ---
 
