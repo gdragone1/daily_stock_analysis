@@ -1250,6 +1250,11 @@ class AkshareFetcher(BaseFetcher):
             logger.debug(f"[API跳过] {stock_code} 是美股，无筹码分布数据")
             return None
 
+        # 港股没有筹码分布数据（ak.stock_cyq_em 仅支持 A 股）
+        if _is_hk_code(stock_code):
+            logger.debug(f"[API跳过] {stock_code} 是港股，无筹码分布数据")
+            return None
+
         # ETF/指数没有筹码分布数据
         if _is_etf_code(stock_code):
             logger.debug(f"[API跳过] {stock_code} 是 ETF/指数，无筹码分布数据")
@@ -1424,7 +1429,11 @@ class AkshareFetcher(BaseFetcher):
         return results if results else None
 
     def _fetch_us_indices(self) -> List[Dict[str, Any]]:
-        """Fetch US index quotes (NASDAQ, S&P 500) from Sina via akshare."""
+        """Fetch US index quotes (NASDAQ, S&P 500) from Sina via akshare.
+
+        Uses per-index calls to ``ak.index_us_stock_sina`` which returns
+        OHLCV history.  We only need the latest row for spot-like data.
+        """
         import akshare as ak
 
         us_map = {
@@ -1435,56 +1444,90 @@ class AkshareFetcher(BaseFetcher):
 
         results: List[Dict[str, Any]] = []
         try:
-            self._set_random_user_agent()
-            self._enforce_rate_limit()
-
-            logger.info("[API调用] ak.index_us_stock_sina() 获取美股指数...")
-            df = ak.index_us_stock_sina()
-
-            if df is None or df.empty:
-                logger.warning("[Akshare] 美股指数数据为空")
-                return results
-
-            logger.info(f"[API返回] 美股指数: {len(df)} 条, 列名: {list(df.columns)}")
-
-            code_col = '代码' if '代码' in df.columns else 'code'
             for sina_code, (internal_code, name) in us_map.items():
-                row = df[df[code_col] == sina_code]
-                if row.empty:
-                    row = df[df[code_col].str.contains(sina_code.replace('.', r'\.'), regex=True, na=False)]
-                if row.empty:
+                try:
+                    self._set_random_user_agent()
+                    self._enforce_rate_limit()
+
+                    logger.info(f"[API调用] ak.index_us_stock_sina(symbol='{sina_code}') 获取{name}...")
+                    df = ak.index_us_stock_sina(symbol=sina_code)
+
+                    if df is None or df.empty:
+                        logger.warning(f"[Akshare] {name} 数据为空")
+                        continue
+
+                    # Ensure we have a code column or the expected OHLCV columns
+                    code_col = None
+                    for candidate in ('代码', 'code'):
+                        if candidate in df.columns:
+                            code_col = candidate
+                            break
+
+                    if code_col is not None:
+                        # Multi-index table (old API format)
+                        row = df[df[code_col] == sina_code]
+                        if row.empty:
+                            row = df[df[code_col].str.contains(
+                                sina_code.replace('.', r'\.'), regex=True, na=False
+                            )]
+                        if row.empty:
+                            continue
+                        row = row.iloc[0]
+
+                        current = safe_float(row.get('最新价', 0))
+                        prev_close = safe_float(row.get('前收盘价', 0)) or safe_float(row.get('昨收', 0))
+                        change = safe_float(row.get('涨跌额', 0))
+                        change_pct = safe_float(row.get('涨跌幅', 0))
+                    else:
+                        # Per-index OHLCV history; take the last two rows
+                        if len(df) < 2:
+                            continue
+                        latest = df.iloc[-1]
+                        prev = df.iloc[-2]
+
+                        current = safe_float(latest.get('close', 0))
+                        prev_close = safe_float(prev.get('close', 0))
+                        change = 0.0
+                        change_pct = 0.0
+
+                    if not change_pct and current and prev_close and prev_close > 0:
+                        change = current - prev_close
+                        change_pct = (change / prev_close) * 100
+
+                    high = safe_float(
+                        latest.get('high', 0) if code_col is None else row.get('最高', 0)
+                    )
+                    low = safe_float(
+                        latest.get('low', 0) if code_col is None else row.get('最低', 0)
+                    )
+                    open_price = safe_float(
+                        latest.get('open', 0) if code_col is None
+                        else (row.get('今开', 0) or row.get('开盘', 0))
+                    )
+                    amplitude = 0.0
+                    if prev_close and prev_close > 0 and high and low:
+                        amplitude = (high - low) / prev_close * 100
+
+                    results.append({
+                        'code': internal_code,
+                        'name': name,
+                        'current': current,
+                        'change': change,
+                        'change_pct': change_pct,
+                        'open': open_price,
+                        'high': high,
+                        'low': low,
+                        'prev_close': prev_close,
+                        'volume': safe_float(
+                            latest.get('volume', 0) if code_col is None
+                            else row.get('成交量', 0)
+                        ),
+                        'amount': 0.0,
+                        'amplitude': amplitude,
+                    })
+                except Exception as e:
+                    logger.warning(f"[Akshare] 获取{name}指数失败: {e}")
                     continue
-                row = row.iloc[0]
-
-                current = safe_float(row.get('最新价', 0))
-                prev_close = safe_float(row.get('前收盘价', 0)) or safe_float(row.get('昨收', 0))
-                change = safe_float(row.get('涨跌额', 0))
-                change_pct = safe_float(row.get('涨跌幅', 0))
-
-                if not change_pct and current and prev_close and prev_close > 0:
-                    change = current - prev_close
-                    change_pct = (change / prev_close) * 100
-
-                high = safe_float(row.get('最高', 0))
-                low = safe_float(row.get('最低', 0))
-                amplitude = 0.0
-                if prev_close and prev_close > 0 and high and low:
-                    amplitude = (high - low) / prev_close * 100
-
-                results.append({
-                    'code': internal_code,
-                    'name': name,
-                    'current': current,
-                    'change': change,
-                    'change_pct': change_pct,
-                    'open': safe_float(row.get('今开', 0)) or safe_float(row.get('开盘', 0)),
-                    'high': high,
-                    'low': low,
-                    'prev_close': prev_close,
-                    'volume': safe_float(row.get('成交量', 0)),
-                    'amount': 0.0,
-                    'amplitude': amplitude,
-                })
 
             if results:
                 logger.info(f"[Akshare] 获取到 {len(results)} 个美股指数")

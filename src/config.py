@@ -18,6 +18,31 @@ from dotenv import load_dotenv, dotenv_values
 from dataclasses import dataclass, field
 
 
+_PLACEHOLDER_PREFIXES = (
+    'your_', 'xxx', 'sk-xxx', 'pk-xxx',
+    'your_tavily', 'your_serpapi', 'your_brave', 'your_bocha',
+    'your_tushare', 'your_key', 'your_token',
+)
+
+
+def _is_placeholder_key(key: str) -> bool:
+    """Return True if *key* looks like an .env.example placeholder value."""
+    k = key.strip().lower()
+    if not k:
+        return True
+    if k.endswith('_here'):
+        return True
+    for prefix in _PLACEHOLDER_PREFIXES:
+        if k.startswith(prefix):
+            return True
+    return False
+
+
+def _filter_api_keys(keys: List[str]) -> List[str]:
+    """Remove placeholder / example values from a list of API keys."""
+    return [k for k in keys if not _is_placeholder_key(k)]
+
+
 def _split_multi(raw: str) -> List[str]:
     """
     Split a raw env value into a list of trimmed, non-empty strings.
@@ -399,17 +424,18 @@ class Config:
             stock_list = ['600519', '000001', '300750']
         
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
+        # _filter_api_keys removes .env.example placeholder values
         bocha_keys_str = os.getenv('BOCHA_API_KEYS', '')
-        bocha_api_keys = [k.strip() for k in bocha_keys_str.split(',') if k.strip()]
-        
+        bocha_api_keys = _filter_api_keys([k.strip() for k in bocha_keys_str.split(',') if k.strip()])
+
         tavily_keys_str = os.getenv('TAVILY_API_KEYS', '')
-        tavily_api_keys = [k.strip() for k in tavily_keys_str.split(',') if k.strip()]
-        
+        tavily_api_keys = _filter_api_keys([k.strip() for k in tavily_keys_str.split(',') if k.strip()])
+
         serpapi_keys_str = os.getenv('SERPAPI_API_KEYS', '')
-        serpapi_keys = [k.strip() for k in serpapi_keys_str.split(',') if k.strip()]
+        serpapi_keys = _filter_api_keys([k.strip() for k in serpapi_keys_str.split(',') if k.strip()])
 
         brave_keys_str = os.getenv('BRAVE_API_KEYS', '')
-        brave_api_keys = [k.strip() for k in brave_keys_str.split(',') if k.strip()]
+        brave_api_keys = _filter_api_keys([k.strip() for k in brave_keys_str.split(',') if k.strip()])
 
         # 企微消息类型与最大字节数逻辑
         wechat_msg_type = os.getenv('WECHAT_MSG_TYPE', 'markdown')
@@ -426,7 +452,7 @@ class Config:
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
-            tushare_token=os.getenv('TUSHARE_TOKEN'),
+            tushare_token=None if _is_placeholder_key(os.getenv('TUSHARE_TOKEN', '')) else os.getenv('TUSHARE_TOKEN'),
             gemini_api_key=os.getenv('GEMINI_API_KEY'),
             gemini_model=os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview'),
             gemini_model_fallback=os.getenv('GEMINI_MODEL_FALLBACK', 'gemini-2.5-flash'),

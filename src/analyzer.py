@@ -807,7 +807,7 @@ class GeminiAnalyzer:
         """检查分析器是否可用。"""
         return (
             self._model is not None
-            or self._use_jdcloud is not None
+            or self._use_jdcloud
             or self._anthropic_client is not None
             or self._openai_client is not None
         )
