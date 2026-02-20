@@ -814,8 +814,78 @@ class GeminiAnalyzer:
             return False
 
     def is_available(self) -> bool:
-        """检查分析器是否可用"""
-        return self._model is not None or self._use_jdcloud or self._openai_client is not None
+        """检查分析器是否可用。"""
+        return (
+            self._model is not None
+            or self._use_jdcloud
+            or self._anthropic_client is not None
+            or self._openai_client is not None
+        )
+
+    def _call_anthropic_api(self, prompt: str, generation_config: dict) -> str:
+        """
+        调用 Anthropic Claude Messages API。
+
+        Args:
+            prompt: 用户提示词
+            generation_config: 生成配置（temperature, max_output_tokens）
+
+        Returns:
+            响应文本
+        """
+        config = get_config()
+        max_retries = config.gemini_max_retries
+        base_delay = config.gemini_retry_delay
+        temperature = generation_config.get(
+            'temperature', config.anthropic_temperature
+        )
+        max_tokens = generation_config.get('max_output_tokens', config.anthropic_max_tokens)
+
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    delay = min(delay, 60)
+                    logger.info(
+                        f"[Anthropic] Retry {attempt + 1}/{max_retries}, "
+                        f"waiting {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+
+                message = self._anthropic_client.messages.create(
+                    model=self._current_model_name,
+                    max_tokens=max_tokens,
+                    system=self.SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=temperature,
+                )
+                if (
+                    message.content
+                    and len(message.content) > 0
+                    and hasattr(message.content[0], 'text')
+                ):
+                    return message.content[0].text
+                raise ValueError("Anthropic API returned empty response")
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = (
+                    '429' in error_str
+                    or 'rate' in error_str.lower()
+                    or 'quota' in error_str.lower()
+                )
+                if is_rate_limit:
+                    logger.warning(
+                        f"[Anthropic] Rate limit, attempt {attempt + 1}/"
+                        f"{max_retries}: {error_str[:100]}"
+                    )
+                else:
+                    logger.warning(
+                        f"[Anthropic] API failed, attempt {attempt + 1}/"
+                        f"{max_retries}: {error_str[:100]}"
+                    )
+                if attempt == max_retries - 1:
+                    raise
+        raise Exception("Anthropic API failed after max retries")
 
     def _call_openai_api(self, prompt: str, generation_config: dict) -> str:
         """

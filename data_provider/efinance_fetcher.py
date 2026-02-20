@@ -151,6 +151,21 @@ def _is_us_code(stock_code: str) -> bool:
     return bool(re.match(r'^[A-Z]{1,5}(\.[A-Z])?$', code))
 
 
+def _is_hk_code(stock_code: str) -> bool:
+    """
+    判断代码是否为港股
+
+    港股代码规则：
+    - 带 'hk' 前缀，如 'hk00700', 'hk9988'
+    - 5位纯数字（无前缀时）
+    """
+    code = stock_code.lower()
+    if code.startswith('hk'):
+        numeric_part = code[2:]
+        return numeric_part.isdigit() and 1 <= len(numeric_part) <= 5
+    return code.isdigit() and len(code) == 5
+
+
 class EfinanceFetcher(BaseFetcher):
     """
     Efinance 数据源实现
@@ -253,7 +268,11 @@ class EfinanceFetcher(BaseFetcher):
         # 美股不支持，抛出异常让 DataFetcherManager 切换到 AkshareFetcher/YfinanceFetcher
         if _is_us_code(stock_code):
             raise DataFetchError(f"EfinanceFetcher 不支持美股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
-        
+
+        # 港股不支持（efinance 只支持 A 股），交给 AkshareFetcher 处理
+        if _is_hk_code(stock_code):
+            raise DataFetchError(f"EfinanceFetcher 不支持港股 {stock_code}，请使用 AkshareFetcher")
+
         # 根据代码类型选择不同的获取方法
         if _is_etf_code(stock_code):
             return self._fetch_etf_data(stock_code, start_date, end_date)
@@ -469,6 +488,11 @@ class EfinanceFetcher(BaseFetcher):
         # ETF 需要单独请求 ETF 实时行情接口
         if _is_etf_code(stock_code):
             return self._get_etf_realtime_quote(stock_code)
+
+        # efinance realtime quotes only cover A-shares; skip HK/US stocks
+        if _is_hk_code(stock_code) or _is_us_code(stock_code):
+            logger.debug(f"[API跳过] {stock_code} 不是A股，efinance 实时行情不支持")
+            return None
 
         import efinance as ef
         circuit_breaker = get_realtime_circuit_breaker()
