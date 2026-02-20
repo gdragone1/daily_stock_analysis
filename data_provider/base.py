@@ -683,7 +683,8 @@ class DataFetcherManager:
                     if primary_quote is None:
                         # First successful source becomes primary
                         primary_quote = quote
-                        logger.info(f"[实时行情] {stock_code} 成功获取 (来源: {source})")
+                        actual_source = getattr(quote, 'source', source)
+                        logger.info(f"[实时行情] {stock_code} 成功获取 (来源: {actual_source})")
                         # If all key supplementary fields are present, return early
                         if not self._quote_needs_supplement(primary_quote):
                             return primary_quote
