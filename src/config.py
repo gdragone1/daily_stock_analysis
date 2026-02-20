@@ -613,7 +613,7 @@ class Config:
             return explicit
 
         tushare_token = os.getenv('TUSHARE_TOKEN', '').strip()
-        if tushare_token:
+        if tushare_token and not _is_placeholder_key(tushare_token):
             # Token configured but no explicit priority override
             # Prepend tushare so the paid source is tried first
             import logging
