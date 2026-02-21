@@ -763,6 +763,73 @@ class EfinanceFetcher(BaseFetcher):
             logger.error(f"[efinance] 获取指数行情失败: {e}")
             return None
 
+    def get_csi_theme_indices(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetch all CSI (中证) theme indices via efinance (Eastmoney).
+
+        Uses ef.stock.get_realtime_quotes(['中证系列指数']) to retrieve
+        all CSI series index quotes.
+        """
+        import efinance as ef
+
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ef.stock.get_realtime_quotes(['中证系列指数']) ...")
+            import time as _time
+            api_start = _time.time()
+            df = ef.stock.get_realtime_quotes(['中证系列指数'])
+            api_elapsed = _time.time() - api_start
+
+            if df is None or df.empty:
+                logger.warning(f"[API返回] 中证主题指数为空, 耗时 {api_elapsed:.2f}s")
+                return None
+
+            logger.info(f"[API返回] 中证主题指数成功: {len(df)} 条, 耗时 {api_elapsed:.2f}s")
+
+            code_col = '股票代码' if '股票代码' in df.columns else 'code'
+            name_col = '股票名称' if '股票名称' in df.columns else 'name'
+            price_col = '最新价' if '最新价' in df.columns else 'price'
+            pct_col = '涨跌幅' if '涨跌幅' in df.columns else 'pct_chg'
+            chg_col = '涨跌额' if '涨跌额' in df.columns else 'change'
+            open_col = '开盘' if '开盘' in df.columns else 'open'
+            high_col = '最高' if '最高' in df.columns else 'high'
+            low_col = '最低' if '最低' in df.columns else 'low'
+            vol_col = '成交量' if '成交量' in df.columns else 'volume'
+            amt_col = '成交额' if '成交额' in df.columns else 'amount'
+            amp_col = '振幅' if '振幅' in df.columns else 'amplitude'
+
+            results: List[Dict[str, Any]] = []
+            for _, row in df.iterrows():
+                code = str(row.get(code_col, '')).strip()
+                name = str(row.get(name_col, '')).strip()
+                current = safe_float(row.get(price_col, 0))
+                change_amount = safe_float(row.get(chg_col, 0))
+
+                results.append({
+                    'code': code,
+                    'name': name,
+                    'current': current,
+                    'change': change_amount,
+                    'change_pct': safe_float(row.get(pct_col, 0)),
+                    'open': safe_float(row.get(open_col, 0)),
+                    'high': safe_float(row.get(high_col, 0)),
+                    'low': safe_float(row.get(low_col, 0)),
+                    'prev_close': current - change_amount if current or change_amount else 0,
+                    'volume': safe_float(row.get(vol_col, 0)),
+                    'amount': safe_float(row.get(amt_col, 0)),
+                    'amplitude': safe_float(row.get(amp_col, 0)),
+                })
+
+            if results:
+                logger.info(f"[efinance] 获取到 {len(results)} 个中证主题指数")
+            return results if results else None
+
+        except Exception as e:
+            logger.error(f"[efinance] 获取中证主题指数失败: {e}")
+            return None
+
     def get_market_stats(self) -> Optional[Dict[str, Any]]:
         """
         获取市场涨跌统计 (efinance)
