@@ -25,6 +25,54 @@ from data_provider.base import DataFetcherManager
 logger = logging.getLogger(__name__)
 
 
+# CSI theme index groups for market review.
+# Key: group display name; Value: dict of { H-code: index_name }.
+# The H-code is the official CSI website identifier. When matching API data
+# we derive possible exchange codes (e.g. H30590 -> "930590") and also
+# match by name substring.
+THEME_INDEX_GROUPS = {
+    "机器人 / 智能制造": {
+        "H30590": "中证机器人",
+        "H30577": "中证人工智能主题",
+        "H30526": "中证智能制造主题",
+        "H30549": "中证工业母机",
+        "H30582": "中证机器视觉",
+        "H30574": "中证传感器",
+        "H30015": "中证高端装备制造",
+    },
+    "科技 & 数字经济": {
+        "H30504": "中证半导体",
+        "H30508": "中证芯片产业",
+        "H30534": "中证软件服务",
+        "H30561": "中证计算机",
+        "H30552": "中证云计算",
+        "H30563": "中证数据中心",
+        "H30540": "中证数字经济",
+        "H30536": "中证5G通信",
+    },
+    "新能源 / 新材料": {
+        "H30525": "中证新能源汽车",
+        "H30575": "中证光伏产业",
+        "H30578": "中证锂电池",
+        "H30531": "中证新材料",
+        "H30501": "中证新能源",
+    },
+    "其他科技与成长": {
+        "H36008": "中证科创创业50",
+        "H30579": "中证专精特新",
+        "H30510": "中证新兴产业",
+    },
+}
+
+# Group display icons (used in report rendering)
+THEME_GROUP_ICONS = {
+    "机器人 / 智能制造": "🤖",
+    "科技 & 数字经济": "💻",
+    "新能源 / 新材料": "🔋",
+    "其他科技与成长": "📊",
+}
+
+
 @dataclass
 class MarketIndex:
     """大盘指数数据"""
@@ -74,6 +122,9 @@ class MarketOverview:
     top_sectors: List[Dict] = field(default_factory=list)     # 涨幅前5板块
     bottom_sectors: List[Dict] = field(default_factory=list)  # 跌幅前5板块
 
+    # CSI theme indices, grouped: { group_name: [MarketIndex, ...] }
+    theme_indices: Dict[str, list] = field(default_factory=dict)
+
 
 class MarketAnalyzer:
     """
@@ -118,8 +169,11 @@ class MarketAnalyzer:
         
         # 3. 获取板块涨跌榜
         self._get_sector_rankings(overview)
+
+        # 4. 获取中证主题指数
+        self._get_theme_indices(overview)
         
-        # 4. 获取北向资金（可选）
+        # 5. 获取北向资金（可选）
         # self._get_north_flow(overview)
         
         return overview
@@ -203,6 +257,98 @@ class MarketAnalyzer:
         except Exception as e:
             logger.error(f"[大盘] 获取板块涨跌榜失败: {e}")
     
+    def _get_theme_indices(self, overview: MarketOverview):
+        """Fetch CSI theme indices and group them into overview.theme_indices."""
+        try:
+            logger.info("[大盘] 获取中证主题指数...")
+
+            all_csi = self.data_manager.get_csi_theme_indices()
+            if not all_csi:
+                logger.warning("[大盘] 中证主题指数数据为空")
+                return
+
+            # Build lookup maps: by code and by name keyword
+            code_map: Dict[str, Dict] = {}
+            name_map: Dict[str, Dict] = {}
+            for item in all_csi:
+                c = str(item.get('code', '')).strip()
+                n = str(item.get('name', '')).strip()
+                if c:
+                    code_map[c] = item
+                if n:
+                    name_map[n] = item
+
+            matched_total = 0
+            for group_name, index_defs in THEME_INDEX_GROUPS.items():
+                group_list: List[MarketIndex] = []
+                for h_code, idx_name in index_defs.items():
+                    item = self._match_theme_index(h_code, idx_name, code_map, name_map)
+                    if item:
+                        index = MarketIndex(
+                            code=h_code,
+                            name=item.get('name', idx_name),
+                            current=item.get('current', 0.0),
+                            change=item.get('change', 0.0),
+                            change_pct=item.get('change_pct', 0.0),
+                            open=item.get('open', 0.0),
+                            high=item.get('high', 0.0),
+                            low=item.get('low', 0.0),
+                            prev_close=item.get('prev_close', 0.0),
+                            volume=item.get('volume', 0.0),
+                            amount=item.get('amount', 0.0),
+                            amplitude=item.get('amplitude', 0.0),
+                        )
+                        group_list.append(index)
+                        matched_total += 1
+
+                if group_list:
+                    overview.theme_indices[group_name] = group_list
+
+            logger.info(f"[大盘] 中证主题指数匹配成功 {matched_total} 个，分 {len(overview.theme_indices)} 组")
+
+        except Exception as e:
+            logger.error(f"[大盘] 获取中证主题指数失败: {e}")
+
+    @staticmethod
+    def _match_theme_index(
+        h_code: str,
+        idx_name: str,
+        code_map: Dict[str, Dict],
+        name_map: Dict[str, Dict],
+    ) -> Optional[Dict]:
+        """
+        Try to match a theme index from the fetched CSI data.
+
+        Matching strategies (in order):
+        1. Exchange code: '9' + digits of H-code  (e.g. H30590 -> 930590)
+        2. H-code as-is  (e.g. H30590)
+        3. Bare digits   (e.g. 30590)
+        4. Name substring match (e.g. "中证机器人" in API name)
+        """
+        digits = h_code.lstrip('Hh')
+
+        # Strategy 1: 9 + digits (most common exchange code pattern)
+        candidate = '9' + digits
+        if candidate in code_map:
+            return code_map[candidate]
+
+        # Strategy 2: H-code as-is
+        if h_code in code_map:
+            return code_map[h_code]
+
+        # Strategy 3: bare digits
+        if digits in code_map:
+            return code_map[digits]
+
+        # Strategy 4: name substring match
+        # Strip common suffixes for flexible matching
+        search_name = idx_name.replace("指数", "").replace("主题", "").strip()
+        for api_name, item in name_map.items():
+            if search_name in api_name or api_name in search_name:
+                return item
+
+        return None
+
     # def _get_north_flow(self, overview: MarketOverview):
     #     """获取北向资金流入"""
     #     try:
@@ -319,6 +465,7 @@ class MarketAnalyzer:
         stats_block = self._build_stats_block(overview)
         indices_block = self._build_indices_block(overview)
         sector_block = self._build_sector_block(overview)
+        theme_block = self._build_theme_indices_block(overview)
 
         # Inject market stats after "### 一、市场总结" section (before next ###)
         if stats_block:
@@ -334,9 +481,19 @@ class MarketAnalyzer:
         if sector_block:
             injected = self._insert_after_section(review, r'###\s*五、热点解读', sector_block)
             if injected == review:
-                # Fallback: LLM may have used the old numbering
                 injected = self._insert_after_section(review, r'###\s*四、热点解读', sector_block)
             review = injected
+
+        # Inject theme indices table after the theme tracking section.
+        # Try multiple heading patterns the LLM might use.
+        if theme_block:
+            for pattern in [r'###\s*八、主题指数追踪', r'###\s*[七八九]、主题指数', r'###\s*主题指数']:
+                injected = self._insert_after_section(review, pattern, theme_block)
+                if injected != review:
+                    review = injected
+                    break
+            else:
+                review = review.rstrip() + '\n\n' + theme_block + '\n'
 
         return review
 
@@ -434,6 +591,29 @@ class MarketAnalyzer:
             lines.append(f"> 💧 领跌: {bot}")
         return "\n".join(lines)
 
+    def _build_theme_indices_block(self, overview: MarketOverview) -> str:
+        """Build theme indices block with grouping."""
+        if not overview.theme_indices:
+            return ""
+
+        lines: list = []
+        for group_name, idx_list in overview.theme_indices.items():
+            if not idx_list:
+                continue
+            icon = THEME_GROUP_ICONS.get(group_name, "📌")
+            lines.append(f"#### {icon} {group_name}")
+            lines.append("")
+            lines.append(f"| 指数名称 | 最新 | 涨跌幅 |")
+            lines.append(f"|----------|------|--------|")
+            for idx in idx_list:
+                arrow = "🔴" if idx.change_pct < 0 else "🟢" if idx.change_pct > 0 else "⚪"
+                lines.append(
+                    f"| {idx.name} | {idx.current:.2f} | {arrow} {idx.change_pct:+.2f}% |"
+                )
+            lines.append("")
+
+        return "\n".join(lines).rstrip()
+
     def _build_review_prompt(self, overview: MarketOverview, news: List) -> str:
         """构建复盘报告 Prompt"""
         # A-share index text (global indices handled separately below)
@@ -443,15 +623,14 @@ class MarketAnalyzer:
                 continue
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
             indices_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
-        
+
         # 板块信息
         top_sectors_text = ", ".join([f"{s['name']}({s['change_pct']:+.2f}%)" for s in overview.top_sectors[:3]])
         bottom_sectors_text = ", ".join([f"{s['name']}({s['change_pct']:+.2f}%)" for s in overview.bottom_sectors[:3]])
-        
+
         # 新闻信息 - 支持 SearchResult 对象或字典
         news_text = ""
         for i, n in enumerate(news[:6], 1):
-            # 兼容 SearchResult 对象和字典
             if hasattr(n, 'title'):
                 title = n.title[:50] if n.title else ''
                 snippet = n.snippet[:100] if n.snippet else ''
@@ -459,7 +638,7 @@ class MarketAnalyzer:
                 title = n.get('title', '')[:50]
                 snippet = n.get('snippet', '')[:100]
             news_text += f"{i}. {title}\n   {snippet}\n"
-        
+
         # Separate A-share and global index text for prompt
         a_share_indices = [idx for idx in overview.indices if not self._is_global_index(idx)]
         global_indices = [idx for idx in overview.indices if self._is_global_index(idx)]
@@ -468,6 +647,15 @@ class MarketAnalyzer:
         for idx in global_indices:
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
             global_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+
+        # CSI theme indices text
+        theme_text = ""
+        for group_name, idx_list in overview.theme_indices.items():
+            icon = THEME_GROUP_ICONS.get(group_name, "📌")
+            theme_text += f"\n### {icon} {group_name}\n"
+            for idx in idx_list:
+                direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
+                theme_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
 
         prompt = f"""你是一位专业的A/H/美股市场分析师，请根据以下数据生成一份简洁的大盘复盘报告。
 
@@ -498,6 +686,9 @@ class MarketAnalyzer:
 ## 板块表现
 领涨: {top_sectors_text if top_sectors_text else "暂无数据"}
 领跌: {bottom_sectors_text if bottom_sectors_text else "暂无数据"}
+
+## 中证主题指数
+{theme_text if theme_text else "暂无主题指数数据"}
 
 ## 市场新闻
 {news_text if news_text else "暂无相关新闻"}
@@ -531,6 +722,9 @@ class MarketAnalyzer:
 
 ### 七、风险提示
 （需要关注的风险点）
+
+### 八、主题指数追踪
+（按分组点评主题指数表现，分析热门赛道涨跌原因和趋势。分组包括：机器人/智能制造、科技/数字经济、新能源/新材料、其他科技与成长）
 
 ---
 
@@ -582,6 +776,31 @@ class MarketAnalyzer:
 ### 三、全球市场
 {global_text}"""
 
+        # Build theme indices section for template report
+        theme_section = ""
+        if overview.theme_indices:
+            sec_num = '七' if global_text else '六'
+            theme_section = f"\n### {sec_num}、主题指数追踪\n"
+            for group_name, idx_list in overview.theme_indices.items():
+                if not idx_list:
+                    continue
+                icon = THEME_GROUP_ICONS.get(group_name, "📌")
+                theme_section += f"\n**{icon} {group_name}**\n\n"
+                theme_section += "| 指数名称 | 最新 | 涨跌幅 |\n"
+                theme_section += "|----------|------|--------|\n"
+                for idx in idx_list:
+                    arrow = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
+                    theme_section += f"| {idx.name} | {idx.current:.2f} | {arrow}{abs(idx.change_pct):.2f}% |\n"
+
+        # Section numbering shifts depending on presence of global / theme sections
+        base = 3 if global_text else 2
+        stats_num = self._cn_num(base + 1)
+        sector_num = self._cn_num(base + 2)
+        risk_num_offset = base + 3
+        if overview.theme_indices:
+            risk_num_offset += 1
+        risk_num = self._cn_num(risk_num_offset)
+
         report = f"""## 📊 {overview.date} 大盘复盘
 
 ### 一、市场总结
@@ -591,7 +810,7 @@ class MarketAnalyzer:
 {a_share_text}
 {global_section}
 
-### {'四' if global_text else '三'}、涨跌统计
+### {stats_num}、涨跌统计
 | 指标 | 数值 |
 |------|------|
 | 上涨家数 | {overview.up_count} |
@@ -600,17 +819,25 @@ class MarketAnalyzer:
 | 跌停 | {overview.limit_down_count} |
 | 两市成交额 | {overview.total_amount:.0f}亿 |
 
-### {'五' if global_text else '四'}、板块表现
+### {sector_num}、板块表现
 - **领涨**: {top_text}
 - **领跌**: {bottom_text}
+{theme_section}
 
-### {'六' if global_text else '五'}、风险提示
+### {risk_num}、风险提示
 市场有风险，投资需谨慎。以上数据仅供参考，不构成投资建议。
 
 ---
 *复盘时间: {datetime.now().strftime('%H:%M')}*
 """
         return report
+
+    @staticmethod
+    def _cn_num(n: int) -> str:
+        """Convert an integer (1-10) to Chinese numeral for section headings."""
+        cn = {1: '一', 2: '二', 3: '三', 4: '四', 5: '五',
+              6: '六', 7: '七', 8: '八', 9: '九', 10: '十'}
+        return cn.get(n, str(n))
     
     def run_daily_review(self) -> str:
         """

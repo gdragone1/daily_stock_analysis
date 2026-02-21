@@ -177,6 +177,18 @@ class BaseFetcher(ABC):
         """
         return None
 
+    def get_csi_theme_indices(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetch all CSI (中证) theme indices spot data.
+
+        Returns:
+            List[Dict]: Each dict contains standard keys:
+                code, name, current, change, change_pct, open, high, low,
+                prev_close, volume, amount, amplitude.
+            Returns None if not supported or on failure.
+        """
+        return None
+
     def get_daily_data(
         self,
         stock_code: str, 
@@ -1020,3 +1032,16 @@ class DataFetcherManager:
                 logger.warning(f"[{fetcher.name}] 获取板块排行失败: {e}")
                 continue
         return [], []
+
+    def get_csi_theme_indices(self) -> List[Dict[str, Any]]:
+        """Fetch CSI theme indices spot data (auto failover)."""
+        for fetcher in self._fetchers:
+            try:
+                data = fetcher.get_csi_theme_indices()
+                if data:
+                    logger.info(f"[{fetcher.name}] 获取中证主题指数成功: {len(data)} 个")
+                    return data
+            except Exception as e:
+                logger.warning(f"[{fetcher.name}] 获取中证主题指数失败: {e}")
+                continue
+        return []

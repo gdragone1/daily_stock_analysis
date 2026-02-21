@@ -1406,6 +1406,70 @@ class AkshareFetcher(BaseFetcher):
             logger.error(f"[Akshare] 获取指数行情失败: {e}")
             return None
 
+    def get_csi_theme_indices(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetch all CSI (中证) theme indices via Eastmoney.
+
+        Uses ak.stock_zh_index_spot_em(symbol="中证系列指数") which returns
+        all CSI series indices from Eastmoney.
+
+        Returns:
+            List[Dict] with standardized keys, or None on failure.
+        """
+        import akshare as ak
+
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info("[API调用] ak.stock_zh_index_spot_em(symbol='中证系列指数') ...")
+            import time as _time
+            api_start = _time.time()
+            df = ak.stock_zh_index_spot_em(symbol="中证系列指数")
+            api_elapsed = _time.time() - api_start
+
+            if df is None or df.empty:
+                logger.warning(f"[API返回] 中证主题指数为空, 耗时 {api_elapsed:.2f}s")
+                return None
+
+            logger.info(f"[API返回] 中证主题指数成功: {len(df)} 条, 耗时 {api_elapsed:.2f}s")
+
+            results: List[Dict[str, Any]] = []
+            for _, row in df.iterrows():
+                code = str(row.get('代码', '')).strip()
+                name = str(row.get('名称', '')).strip()
+                current = safe_float(row.get('最新价', 0))
+                prev_close = safe_float(row.get('昨收', 0))
+                high = safe_float(row.get('最高', 0))
+                low = safe_float(row.get('最低', 0))
+
+                amplitude = 0.0
+                if prev_close > 0:
+                    amplitude = (high - low) / prev_close * 100
+
+                results.append({
+                    'code': code,
+                    'name': name,
+                    'current': current,
+                    'change': safe_float(row.get('涨跌额', 0)),
+                    'change_pct': safe_float(row.get('涨跌幅', 0)),
+                    'open': safe_float(row.get('今开', 0)),
+                    'high': high,
+                    'low': low,
+                    'prev_close': prev_close,
+                    'volume': safe_float(row.get('成交量', 0)),
+                    'amount': safe_float(row.get('成交额', 0)),
+                    'amplitude': amplitude,
+                })
+
+            if results:
+                logger.info(f"[Akshare] 获取到 {len(results)} 个中证主题指数")
+            return results if results else None
+
+        except Exception as e:
+            logger.error(f"[Akshare] 获取中证主题指数失败: {e}")
+            return None
+
     def get_global_indices(self) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch global indices (HK Hang Seng, NASDAQ, S&P 500) via akshare.
