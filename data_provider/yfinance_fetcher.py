@@ -230,7 +230,7 @@ class YfinanceFetcher(BaseFetcher):
         df = df[existing_cols]
         
         return df
-
+    
     # A-share indices: internal code -> (yfinance ticker, display name)
     _A_SHARE_INDICES = {
         'sh000001': ('000001.SS', '上证指数'),
@@ -300,7 +300,7 @@ class YfinanceFetcher(BaseFetcher):
                 continue
 
         return results
-        
+
     def get_main_indices(self) -> Optional[List[Dict[str, Any]]]:
         """
         获取主要指数行情 (Yahoo Finance)

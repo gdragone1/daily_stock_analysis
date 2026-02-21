@@ -941,7 +941,7 @@ class DataFetcherManager:
         # Step 1: get primary result from first successful fetcher
         for fetcher in self._fetchers:
             try:
-                data = fetcher.get_main_indices(region=region)
+                data = fetcher.get_main_indices(region='cn')
                 if data:
                     logger.info(f"[{fetcher.name}] 获取指数行情成功")
                     result = data
