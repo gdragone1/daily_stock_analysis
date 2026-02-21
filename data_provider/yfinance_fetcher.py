@@ -230,7 +230,7 @@ class YfinanceFetcher(BaseFetcher):
         df = df[existing_cols]
         
         return df
-
+    
     # A-share indices: internal code -> (yfinance ticker, display name)
     _A_SHARE_INDICES = {
         'sh000001': ('000001.SS', '上证指数'),
@@ -249,23 +249,6 @@ class YfinanceFetcher(BaseFetcher):
         'usGSPC':   ('^GSPC',  '标普500'),
         'usDJI':    ('^DJI',   '道琼斯'),
     }
-
-    def _fetch_indices(self, mapping: dict) -> List[Dict[str, Any]]:
-        """
-        Fetch index quotes for a given code -> (yf_ticker, name) mapping.
-
-        Shared implementation for both A-share and global indices.
-        """
-        import yfinance as yf
-
-        results: List[Dict[str, Any]] = []
-        for internal_code, (yf_code, name) in mapping.items():
-            try:
-                ticker = yf.Ticker(yf_code)
-                # Fetch last 2 trading days to compute change
-                hist = ticker.history(period='2d')
-                if hist.empty:
-                    continue
 
     def _fetch_indices(self, mapping: dict) -> List[Dict[str, Any]]:
         """
@@ -317,7 +300,7 @@ class YfinanceFetcher(BaseFetcher):
                 continue
 
         return results
-        
+
     def get_main_indices(self) -> Optional[List[Dict[str, Any]]]:
         """
         获取主要指数行情 (Yahoo Finance)
